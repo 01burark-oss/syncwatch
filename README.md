@@ -6,36 +6,36 @@ Video dosyaları **her iki tarafta da yerelde** durur. İnternetten yalnızca "o
 
 ## Nasıl çalışır
 
-- **Sunucu (Go):** Tek binary. Odaları tutar, oynatma durumunu (`oynuyor mu, konum, sunucu zamanı`) ve sohbet mesajlarını odadaki herkese iletir. Web istemcisi de binary'nin içine gömülüdür.
-- **İstemci (web / PWA):** Tarayıcıda açılır, telefonda ana ekrana eklenebilir. Kullanıcı kendi bilgisayarındaki dosyayı seçer.
+Her şey Cloudflare'de çalışır, ayrı bir sunucu yoktur.
+
+- **Workers:** Arayüz dosyalarını (`web/`) sunar ve isteklere yön verir (`worker/index.ts`).
+- **Durable Objects:** Her oda bir Durable Object'tir. Oynatma durumunu (`oynuyor mu, konum, sunucu zamanı`), sohbeti ve odadakileri tutar. Durum kalıcıdır; ertesi gün aynı odaya girince kaldığınız yer hatırlanır.
+- **R2:** "Odaya yükle" ile paylaşılan video dosyaları burada durur. Yükleme 10 MB'lık parçalarla yapılır, yarıda kalırsa kalan parçalardan devam eder. İndirme de kesilirse kaldığı yerden sürer. Odaya yeni dosya yüklenince eskisi silinir.
+- **Cihazdan cihaza:** Dosya odaya yüklenmemişse, karşı tarafın açtığı dosya doğrudan onun tarayıcısından (WebRTC) indirilebilir. Sunucu yalnızca bağlantı mesajlarını taşır.
 - **Senkron:** İstemciler sunucu saatiyle aradaki farkı ölçer. Her 0,5 saniyede beklenen konumla karşılaştırır:
   - 1 saniyeden büyük fark: direkt o saniyeye atlar.
   - 0,15 – 1 saniye arası fark: oynatma hızını %5–10 değiştirerek fark edilmeden yakalar.
-- **Dosya kontrolü:** İki tarafın seçtiği dosyanın süresi ve boyutu karşılaştırılır, farklıysa uyarı çıkar.
+- **Dosya kontrolü:** İki tarafın dosyasının süresi farklıysa uyarı çıkar.
 - **Altyazı:** `.srt` veya `.vtt` dosyası yerelden yüklenir.
 - **iPhone:** Safari kullanıcı dokunmadan video başlatmadığı için dosya seçildikten sonra bir kez "Hazırım" butonuna basılır.
 - Biri odadan çıkarsa video herkeste durur.
 
-## Çalıştırma
+## Yerelde çalıştırma
 
 ```sh
-go run .            # http://localhost:8080
-go build -o syncwatch . && ./syncwatch -addr :8080
+npm install
+npm run dev        # http://localhost:8787 (Durable Objects ve R2 yerelde taklit edilir)
 ```
 
-Sunucu portu `PORT` ortam değişkeninden de okur.
+## Cloudflare'de yayına alma (ücretsiz)
 
-## Render'da yayına alma (ücretsiz)
+1. **R2'yi aç:** Cloudflare panelinde **R2 Object Storage** → **Enable**. Ücretsiz kotaya (10 GB) rağmen kart bilgisi ister; kotayı aşmadıkça ücret çıkmaz.
+2. **Kova oluştur:** **Create bucket** → ad: `syncwatch-files`.
+3. **Eski dosyalar kendiliğinden silinsin (önerilir):** Kovanın **Settings** → **Object lifecycle rules** → **Add rule** → "7 gün sonra sil".
+4. **Repoyu bağla:** **Workers & Pages** → **Create** → **Import a repository** → `syncwatch` reposunu seç. Deploy komutu `npx wrangler deploy` olarak kalabilir. **Deploy**'a bas.
+5. Birkaç dakika sonra `https://syncwatch.<hesabın>.workers.dev` adresi çalışır. Sonraki her push otomatik yayına alınır.
 
-Repoda hazır bir `render.yaml` var.
-
-1. [dashboard.render.com](https://dashboard.render.com) → **New** → **Blueprint**.
-2. GitHub hesabını bağla ve `syncwatch` reposunu seç.
-3. **Apply**'a bas. Birkaç dakika içinde `https://syncwatch-xxxx.onrender.com` gibi bir adres verir.
-
-HTTPS ve WebSocket (`wss://`) Render tarafından otomatik sağlanır. Ücretsiz planda sunucu 15 dakika kimse bağlı değilken uyur; ilk açılışta sayfanın gelmesi 30–60 saniye sürebilir. İzlerken uyumaz. Sunucu yeniden başlarsa istemciler kaldıkları konumu sunucuya geri yükler, video başa dönmez.
-
-Odaya girdikten sonra **Davet linki** butonu `?oda=...` linkini kopyalar.
+Not: R2 açmak istemezsen `wrangler.jsonc` içindeki `r2_buckets` bölümünü sil; "Odaya yükle" gizlenir, cihazdan cihaza aktarım çalışmaya devam eder.
 
 ## Dosya formatı
 
@@ -53,12 +53,15 @@ Video zaten H.264 ise yalnızca kapsayıcıyı değiştirmek çok daha hızlıd�
 
 Bağlantı: `/ws?room=<oda>&name=<ad>`
 
+Dosya uçları: `POST /api/upload/start`, `PUT /api/upload/part`, `POST /api/upload/complete`, `POST /api/upload/abort`, `GET /api/files/<key>` (Range destekli).
+
 | İstemci → sunucu | Açıklama |
 |---|---|
 | `{type:"play"\|"pause"\|"seek", position}` | Oynatma eylemi |
 | `{type:"chat", text}` | Sohbet mesajı |
 | `{type:"file", file:{name,size,duration}}` | Seçilen dosya bilgisi |
 | `{type:"ping", t}` | Saat farkı ölçümü |
+| `{type:"signal", to, data}` | Cihazdan cihaza aktarım için WebRTC mesajı |
 
 | Sunucu → istemci | Açıklama |
 |---|---|
@@ -67,11 +70,15 @@ Bağlantı: `/ws?room=<oda>&name=<ad>`
 | `{type:"system", text}` | Katıldı / ayrıldı bildirimi |
 | `{type:"presence", members:[{name,file}]}` | Odadakiler ve dosyaları |
 | `{type:"pong", t, serverTime}` | Ping cevabı |
+| `{type:"welcome", id, storage, shared}` | Bağlanınca: kimliğin, depolama açık mı, odadaki dosya |
+| `{type:"shared", shared:{key,name,size,by}}` | Odaya yeni dosya yüklendi |
+| `{type:"signal", fromId, from, data}` | WebRTC mesajı |
 
 ## Yol haritası
 
 - [x] Oda + senkron oynatma + yazılı sohbet
 - [x] Sade arayüz (siyah zemin, yeşil vurgu), sürükle-bırak, davet linki
-- [x] Render için hazırlık (`render.yaml`)
+- [x] Cloudflare Workers + Durable Objects + R2
+- [x] Dosyayı odaya yükleme / karşıdan indirme (kaldığı yerden devam)
 - [ ] Sesli sohbet (WebRTC, yalnızca ses; STUN/TURN gerekir)
 - [ ] Gerekirse her formatı oynatan masaüstü istemci (Tauri + mpv)

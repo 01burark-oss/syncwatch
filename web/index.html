@@ -70,12 +70,12 @@
               <span class="or">ya da</span>
               <p id="offerText"></p>
               <button id="offerBtn" class="primary" type="button">İndir ve izle</button>
-              <small>Dosya doğrudan onun cihazından gelir, indirme bitene kadar onun sayfası açık kalmalı.</small>
+              <small id="offerNote"></small>
             </div>
 
             <div id="download" class="download" hidden>
               <p id="dlTitle" class="dlTitle"></p>
-              <div class="bar"><div id="dlBar"></div></div>
+              <div class="progress"><div id="dlBar"></div></div>
               <p id="dlLine" class="dlLine"></p>
               <div class="dlActions">
                 <button id="dlRetry" class="primary" type="button" hidden>Devam et</button>
@@ -96,6 +96,7 @@
           <span id="fileName" class="fileName"></span>
           <span id="syncState" class="syncState"></span>
           <span id="uploadInfo" class="uploadInfo" hidden></span>
+          <button id="uploadBtn" class="ghost small" type="button" hidden>Odaya yükle</button>
           <span class="spacer"></span>
           <a id="saveLink" class="ghost small" hidden>Cihaza kaydet</a>
           <label class="ghost small">

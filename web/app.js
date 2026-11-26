@@ -29,6 +29,8 @@ let localActionUntil = 0;
 let myFile = null;
 let myFileObj = null;     // seçilen File; karşı taraf indirmek isterse buradan gönderilir
 let myId = "";
+let storageAvailable = false; // sunucuda dosya depolama (R2) açık mı
+let shared = null;            // odaya yüklenmiş dosya { key, name, size, by }
 let members = [];
 
 const serverNow = () => Date.now() + clockOffset;
@@ -168,6 +170,13 @@ function onMessage(m) {
       break;
     case "welcome":
       myId = m.id;
+      storageAvailable = !!m.storage;
+      shared = m.shared || null;
+      if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
+      break;
+    case "shared":
+      shared = m.shared || null;
+      if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
       break;
     case "signal":
       if (typeof handleSignal === "function") handleSignal(m);
@@ -307,7 +316,7 @@ function loadFile(f) {
     fileLoaded = true;
     myFile = { name: f.name, size: f.size, duration: video.duration || 0 };
     myFileObj = f;
-    if (typeof renderOffer === "function") renderOffer();
+    if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
     send({ type: "file", file: myFile });
     $("readyOverlay").hidden = false;
     checkFiles();

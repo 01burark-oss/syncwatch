@@ -1,2 +1,3 @@
-/syncwatch
-*.exe
+node_modules/
+.wrangler/
+.dev.vars

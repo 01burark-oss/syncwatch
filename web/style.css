@@ -256,8 +256,14 @@ input:not([type=file]):focus { outline: none; border-color: var(--accent); }
 .download p { margin: 0; }
 .dlTitle { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dlLine { font-size: 13px; color: var(--muted); }
-.bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
-.bar div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .4s ease; }
+.progress { width: 100%; height: 8px; border-radius: 99px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.progress div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .4s ease; }
 .dlActions { display: flex; gap: 8px; justify-content: center; }
 .uploadInfo { color: var(--accent); }
 a.ghost { text-decoration: none; }
+
+/* Boşken kutu içeriğe göre uzayabilsin (telefonda teklif kartı sığsın). */
+.videoWrap.empty { aspect-ratio: auto; max-height: none; background: transparent; }
+.videoWrap.empty video { display: none; }
+.videoWrap.empty .dropzone { position: relative; inset: auto; width: 100%; min-height: clamp(300px, 48vw, 506px); }
+.dropzone.busy .pick { display: none; }

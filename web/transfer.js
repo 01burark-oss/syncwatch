@@ -117,7 +117,7 @@ function renderUploads() {
   uploadsTimer = setTimeout(() => {
     const el = $("uploadInfo");
     const list = [...uploads.values()].filter((u) => u.sent < u.size);
-    if (!list.length) { el.hidden = true; return; }
+    if (!list.length) { renderUploadUi(); return; }
     el.hidden = false;
     el.textContent = list.map((u) => `${u.name} indiriyor · %${Math.floor((u.sent / u.size) * 100)}`).join(", ");
   }, 100);
@@ -136,10 +136,18 @@ function offerFor() {
 function renderOffer() {
   const box = $("offer");
   if (download && download.state !== "idle") { box.hidden = true; return; }
+  if (!myFile && storageAvailable && shared) {
+    box.hidden = false;
+    $("offerText").textContent = `${shared.by} “${shared.name}” dosyasını odaya yükledi (${fmtSize(shared.size)}).`;
+    $("offerNote").textContent = "İnternetin koparsa indirme kaldığı yerden devam eder.";
+    $("offerBtn").onclick = () => startCloudDownload(shared);
+    return;
+  }
   const m = offerFor();
   if (!m) { box.hidden = true; return; }
   box.hidden = false;
   $("offerText").textContent = `${m.name} “${m.file.name}” dosyasını açtı (${fmtSize(m.file.size)}).`;
+  $("offerNote").textContent = "Dosya doğrudan onun cihazından gelir, indirme bitene kadar onun sayfası açık kalmalı.";
   $("offerBtn").onclick = () => startDownload(m);
 }
 
@@ -159,6 +167,7 @@ async function startDownload(m, resume) {
 
   const offset = await sink.reopen();
   download = {
+    source: "peer",
     peerId: m.id, peerName: m.name, file: fileInfo, received: offset, sink,
     lastBytes: offset, lastT: performance.now(), speed: 0, state: "connecting",
   };
@@ -209,7 +218,7 @@ async function startDownload(m, resume) {
 async function finishDownload(dl) {
   dl.state = "saving";
   renderDownload();
-  closePeer(dl.peerId);
+  if (dl.peerId) closePeer(dl.peerId);
   try {
     const file = await dl.sink.finish(dl.file);
     dl.state = "done";
@@ -229,7 +238,8 @@ function failDownload(reason) {
   if (!dl || dl.state === "failed") return;
   dl.state = "failed";
   dl.error = reason;
-  closePeer(dl.peerId);
+  if (dl.ctrl) dl.ctrl.abort();
+  if (dl.peerId) closePeer(dl.peerId);
   dl.sink.pause().catch(() => {});
   renderDownload();
 }
@@ -237,7 +247,8 @@ function failDownload(reason) {
 function cancelDownload() {
   const dl = download;
   if (!dl) return;
-  closePeer(dl.peerId);
+  if (dl.ctrl) dl.ctrl.abort();
+  if (dl.peerId) closePeer(dl.peerId);
   dl.sink.abort().catch(() => {});
   download = null;
   renderDownload();
@@ -276,6 +287,7 @@ function diskSink(handle) {
     write(buf) {
       chain = chain.then(() => writable.write(buf)).then(() => { written += buf.byteLength; });
     },
+    flush() { return chain; },
     async pause() { await chain.catch(() => {}); if (writable) { await writable.close(); writable = null; } },
     async finish() { await chain; await writable.close(); writable = null; return handle.getFile(); },
     async abort() { if (writable) { await writable.abort(); writable = null; } },
@@ -317,6 +329,7 @@ function offerSave(file) {
 function renderDownload() {
   const box = $("download");
   const dl = download;
+  $("placeholder").classList.toggle("busy", !!dl);
   if (!dl) { box.hidden = true; renderOffer(); return; }
   box.hidden = false;
   $("offer").hidden = true;
@@ -325,7 +338,7 @@ function renderDownload() {
   $("dlTitle").textContent = dl.file.name;
   $("dlRetry").hidden = dl.state !== "failed";
   let line = "";
-  if (dl.state === "connecting") line = `${dl.peerName} ile bağlantı kuruluyor…`;
+  if (dl.state === "connecting") line = dl.source === "cloud" ? "Başlıyor…" : `${dl.peerName} ile bağlantı kuruluyor…`;
   else if (dl.state === "receiving") {
     const left = dl.speed > 0 ? (dl.file.size - dl.received) / dl.speed : 0;
     line = `%${Math.floor(pct)} · ${fmtSize(dl.received)} / ${fmtSize(dl.file.size)}`;
@@ -350,6 +363,7 @@ $("dlCancel").addEventListener("click", cancelDownload);
 $("dlRetry").addEventListener("click", () => {
   const dl = download;
   if (!dl) return;
+  if (dl.source === "cloud") { startCloudDownload(dl.shared, true); return; }
   const m = members.find((x) => x.id === dl.peerId) ||
     members.find((x) => x.id !== myId && x.file && x.file.name === dl.file.name && x.file.size === dl.file.size);
   if (!m) { dl.error = "Dosyayı paylaşan kişi şu an odada değil."; renderDownload(); return; }
@@ -369,4 +383,205 @@ function fmtDuration(s) {
   const m = Math.round(s / 60);
   if (m < 60) return `${m} dk`;
   return `${Math.floor(m / 60)} sa ${m % 60} dk`;
+}
+
+// ======================================================================
+// Odaya yükleme (Cloudflare R2). Dosya 10 MB'lık parçalarla yüklenir;
+// yarıda kalırsa tamamlanan parçalar hatırlanır ve kalandan devam edilir.
+// ======================================================================
+let upload = null; // { file, st, saveKey, sent, speed, lastBytes, lastT, state, xhr, error }
+
+async function api(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Sunucu hatası");
+  return data;
+}
+
+function sharedMatchesMine() {
+  return shared && myFileObj && shared.name === myFileObj.name && shared.size === myFileObj.size;
+}
+
+function renderUploadUi() {
+  const btn = $("uploadBtn");
+  const info = $("uploadInfo");
+  if (upload) {
+    btn.hidden = false;
+    if (upload.state === "uploading") {
+      btn.textContent = "Duraklat";
+      const pct = Math.floor((upload.sent / upload.file.size) * 100);
+      let t = `Odaya yükleniyor · %${pct}`;
+      if (upload.speed > 0) t += ` · ${fmtDuration((upload.file.size - upload.sent) / upload.speed)} kaldı`;
+      info.textContent = t;
+    } else {
+      btn.textContent = "Devam et";
+      info.textContent = upload.error ? `${upload.error} (%${Math.floor((upload.sent / upload.file.size) * 100)})` : `Duraklatıldı · %${Math.floor((upload.sent / upload.file.size) * 100)}`;
+    }
+    info.hidden = false;
+    return;
+  }
+  if (storageAvailable && sharedMatchesMine()) {
+    btn.hidden = true;
+    info.hidden = false;
+    info.textContent = "Odaya yüklendi";
+    return;
+  }
+  btn.hidden = !(storageAvailable && myFileObj);
+  btn.textContent = "Odaya yükle";
+  if (!uploads.size) info.hidden = true;
+}
+
+$("uploadBtn").addEventListener("click", () => {
+  if (upload && upload.state === "uploading") {
+    upload.state = "paused";
+    if (upload.xhr) upload.xhr.abort();
+    renderUploadUi();
+    return;
+  }
+  startUpload();
+});
+
+async function startUpload() {
+  const f = myFileObj;
+  if (!f) return;
+  const saveKey = `sw-up:${roomId}:${f.name}:${f.size}`;
+  let st = null;
+  try { st = JSON.parse(safeGet(saveKey) || "null"); } catch {}
+  upload = { file: f, st, saveKey, sent: 0, speed: 0, lastBytes: 0, lastT: performance.now(), state: "uploading", xhr: null, error: "" };
+  const up = upload;
+  renderUploadUi();
+  try {
+    if (!st) {
+      const r = await api("/api/upload/start", { room: roomId, name: f.name, size: f.size });
+      st = up.st = { key: r.key, uploadId: r.uploadId, partSize: r.partSize, parts: [] };
+      safeSet(saveKey, JSON.stringify(st));
+    }
+    const total = Math.ceil(f.size / st.partSize);
+    const done = new Set(st.parts.map((p) => p.partNumber));
+    up.sent = st.parts.reduce((s, p) => s + Math.min(st.partSize, f.size - (p.partNumber - 1) * st.partSize), 0);
+    up.lastBytes = up.sent;
+
+    for (let n = 1; n <= total; n++) {
+      if (done.has(n)) continue;
+      if (up.state !== "uploading") return;
+      const start = (n - 1) * st.partSize;
+      const blob = f.slice(start, Math.min(start + st.partSize, f.size));
+      let part = null;
+      for (let attempt = 0; attempt < 6 && !part; attempt++) {
+        if (up.state !== "uploading") return;
+        try {
+          part = await putPart(up, st, n, blob, up.sent);
+        } catch (err) {
+          if (up.state !== "uploading") return;
+          if (err.status === 404) throw Object.assign(new Error("expired"), { expired: true });
+          await new Promise((r) => setTimeout(r, Math.min(30000, 1000 * 2 ** attempt)));
+        }
+      }
+      if (!part) throw new Error("İnternet bağlantısı koptu.");
+      st.parts.push(part);
+      up.sent += blob.size;
+      safeSet(saveKey, JSON.stringify(st));
+    }
+
+    await api("/api/upload/complete", { room: roomId, key: st.key, uploadId: st.uploadId, parts: st.parts, by: myName });
+    try { localStorage.removeItem(saveKey); } catch {}
+    upload = null;
+    toast("Dosya odaya yüklendi");
+    renderUploadUi();
+  } catch (err) {
+    if (err.expired) {
+      // Yarım kalan yükleme sunucuda süresi dolmuş: baştan başla.
+      try { localStorage.removeItem(saveKey); } catch {}
+      upload = null;
+      return startUpload();
+    }
+    if (upload !== up) return;
+    up.state = "failed";
+    up.error = err.message || "Yükleme durdu.";
+    renderUploadUi();
+  }
+}
+
+// Bir parçayı XHR ile yükle (fetch yükleme ilerlemesini göstermiyor).
+function putPart(up, st, n, blob, base) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    up.xhr = xhr;
+    const q = new URLSearchParams({ key: st.key, uploadId: st.uploadId, n: String(n) });
+    xhr.open("PUT", "/api/upload/part?" + q);
+    xhr.upload.onprogress = (e) => renderUploadProgress(up, base + e.loaded);
+    xhr.onload = () => {
+      up.xhr = null;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("bad")); }
+      } else reject(Object.assign(new Error("http"), { status: xhr.status }));
+    };
+    xhr.onerror = () => { up.xhr = null; reject(new Error("net")); };
+    xhr.onabort = () => { up.xhr = null; reject(new Error("abort")); };
+    xhr.send(blob);
+  }).finally(() => { up.sent = base; });
+}
+
+function renderUploadProgress(up, bytes) {
+  const now = performance.now();
+  if (now - up.lastT >= 1000) {
+    const inst = ((bytes - up.lastBytes) * 1000) / (now - up.lastT);
+    up.speed = up.speed ? up.speed * 0.7 + inst * 0.3 : inst;
+    up.lastBytes = bytes;
+    up.lastT = now;
+  }
+  const keep = up.sent;
+  up.sent = bytes;
+  renderUploadUi();
+  up.sent = keep;
+}
+
+// Odadaki dosyayı R2'den indir; kesilirse Range ile kaldığı yerden devam et.
+async function startCloudDownload(sh, resume) {
+  const fileInfo = { name: sh.name, size: sh.size };
+  let sink;
+  if (resume && download && download.sink && download.shared && download.shared.key === sh.key) {
+    sink = download.sink;
+  } else {
+    try {
+      sink = await makeSink(fileInfo);
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      sink = memorySink();
+    }
+  }
+  const offset = await sink.reopen();
+  const ctrl = new AbortController();
+  const dl = {
+    source: "cloud", shared: sh, ctrl, file: fileInfo, received: offset, sink,
+    lastBytes: offset, lastT: performance.now(), speed: 0, state: "connecting",
+  };
+  download = dl;
+  renderDownload();
+
+  try {
+    const url = "/api/files/" + sh.key.split("/").map(encodeURIComponent).join("/");
+    const res = await fetch(url, { headers: offset > 0 ? { Range: `bytes=${offset}-` } : {}, signal: ctrl.signal });
+    if (res.status === 404) throw new Error("Dosya artık odada değil.");
+    if (!res.ok) throw new Error("İndirme başlamadı.");
+    if (offset > 0 && res.status !== 206) throw new Error("Sunucu devam etmeye izin vermedi.");
+    dl.state = "receiving";
+    renderDownload();
+    const reader = res.body.getReader();
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (download !== dl) return;
+      sink.write(value);
+      dl.received += value.byteLength;
+      // Diske yazma ağdan yavaşsa bellek dolmasın.
+      if (sink.flush && ++n % 64 === 0) await sink.flush();
+    }
+    if (dl.received < dl.file.size) throw new Error("Bağlantı koptu.");
+    finishDownload(dl);
+  } catch (err) {
+    if (download !== dl || dl.state === "failed") return;
+    failDownload(err.name === "AbortError" ? "Durduruldu." : (err.message === "Failed to fetch" || err.name === "TypeError" ? "Bağlantı koptu." : err.message));
+  }
 }

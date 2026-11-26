@@ -1,0 +1,21 @@
+{
+  // SyncWatch: Cloudflare Workers + Durable Objects + R2
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syncwatch",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-11-01",
+
+  // Arayüz dosyaları (web/ klasörü) doğrudan Cloudflare'den sunulur.
+  "assets": { "directory": "./web" },
+
+  // Her oda bir Durable Object: oynatma durumu, sohbet ve kimin odada olduğu.
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+
+  // Odaya yüklenen video dosyaları.
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "syncwatch-files" }],
+
+  "observability": { "enabled": true }
+}
