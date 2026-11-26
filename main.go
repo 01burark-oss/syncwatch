@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -15,7 +16,12 @@ import (
 var webFiles embed.FS
 
 func main() {
-	addr := flag.String("addr", ":8080", "dinlenecek adres")
+	// Render gibi platformlar portu PORT ortam değişkeniyle verir.
+	defAddr := ":8080"
+	if p := os.Getenv("PORT"); p != "" {
+		defAddr = ":" + p
+	}
+	addr := flag.String("addr", defAddr, "dinlenecek adres")
 	flag.Parse()
 
 	hub := NewHub()

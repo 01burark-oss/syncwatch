@@ -32,6 +32,7 @@ type Message struct {
 	Position   float64 `json:"position,omitempty"`
 	ServerTime int64   `json:"serverTime,omitempty"` // ms, Unix
 	By         string  `json:"by,omitempty"`
+	Fresh      bool    `json:"fresh,omitempty"` // oda yeni açıldı, henüz kimse oynatmadı
 
 	// chat / system
 	From string `json:"from,omitempty"`
@@ -72,13 +73,14 @@ type room struct {
 	playing    bool
 	position   float64 // ServerTime anındaki konum (saniye)
 	serverTime int64   // ms
+	touched    bool    // en az bir oynat/durdur/sar geldi mi
 }
 
 func nowMs() int64 { return time.Now().UnixMilli() }
 
 // stateMsg odanın şu anki durumunu döndürür. r.mu tutulmalı.
 func (r *room) stateMsg(by string) Message {
-	return Message{Type: "state", Playing: r.playing, Position: r.position, ServerTime: r.serverTime, By: by}
+	return Message{Type: "state", Playing: r.playing, Position: r.position, ServerTime: r.serverTime, By: by, Fresh: !r.touched}
 }
 
 // currentPosition oynatma devam ediyorsa geçen süreyi ekler. r.mu tutulmalı.
@@ -254,6 +256,7 @@ func (h *Hub) handle(r *room, c *client, m Message) {
 		}
 		r.position = m.Position
 		r.serverTime = now
+		r.touched = true
 		st := r.stateMsg(c.name)
 		st.Text = m.Type // hangi eylem olduğu, istemcide bildirim için
 		r.broadcast(st)

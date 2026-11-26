@@ -1,0 +1,10 @@
+# Render Blueprint: repoyu Render'a bağlayınca bu ayarlar otomatik uygulanır.
+services:
+  - type: web
+    name: syncwatch
+    runtime: go
+    plan: free
+    buildCommand: go build -o syncwatch .
+    startCommand: ./syncwatch
+    healthCheckPath: /healthz
+    autoDeploy: true

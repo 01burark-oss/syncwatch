@@ -23,7 +23,17 @@ go run .            # http://localhost:8080
 go build -o syncwatch . && ./syncwatch -addr :8080
 ```
 
-Arkadaşınla kullanmak için sunucunun internetten erişilebilir olması gerekir (ucuz bir VPS, Fly.io, Railway vb.). Telefon ve PWA özellikleri için önüne HTTPS koy (ör. Caddy: `caddy reverse-proxy --from alanadin.com --to :8080`). WebSocket otomatik olarak `wss://` kullanır.
+Sunucu portu `PORT` ortam değişkeninden de okur.
+
+## Render'da yayına alma (ücretsiz)
+
+Repoda hazır bir `render.yaml` var.
+
+1. [dashboard.render.com](https://dashboard.render.com) → **New** → **Blueprint**.
+2. GitHub hesabını bağla ve `syncwatch` reposunu seç.
+3. **Apply**'a bas. Birkaç dakika içinde `https://syncwatch-xxxx.onrender.com` gibi bir adres verir.
+
+HTTPS ve WebSocket (`wss://`) Render tarafından otomatik sağlanır. Ücretsiz planda sunucu 15 dakika kimse bağlı değilken uyur; ilk açılışta sayfanın gelmesi 30–60 saniye sürebilir. İzlerken uyumaz. Sunucu yeniden başlarsa istemciler kaldıkları konumu sunucuya geri yükler, video başa dönmez.
 
 Odaya girdikten sonra **Davet linki** butonu `?oda=...` linkini kopyalar.
 
@@ -62,6 +72,6 @@ Bağlantı: `/ws?room=<oda>&name=<ad>`
 
 - [x] Oda + senkron oynatma + yazılı sohbet
 - [x] Sade arayüz (siyah zemin, yeşil vurgu), sürükle-bırak, davet linki
-- [ ] Sunucuyu yayına alma (HTTPS)
+- [x] Render için hazırlık (`render.yaml`)
 - [ ] Sesli sohbet (WebRTC, yalnızca ses; STUN/TURN gerekir)
 - [ ] Gerekirse her formatı oynatan masaüstü istemci (Tauri + mpv)

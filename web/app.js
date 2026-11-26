@@ -103,7 +103,9 @@ function connect() {
   ws.onclose = () => {
     setConn(false);
     setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+    // Ücretsiz sunucu uykudan uyanırken ilk denemeler başarısız olabilir;
+    // bekleme süresini kısa tutuyoruz ki uyanır uyanmaz bağlanalım.
+    reconnectDelay = Math.min(reconnectDelay * 2, 5000);
   };
 }
 
@@ -141,6 +143,14 @@ function onMessage(m) {
       break;
     }
     case "state":
+      // Sunucu yeniden başladıysa oda boş açılır (konum 0, durmuş). Bizde
+      // izlenen bir şey varsa sıfıra atlamak yerine kendi konumumuzu
+      // sunucuya geri yükleriz.
+      if (m.fresh && fileLoaded && state && (state.playing || state.position > 0)) {
+        const pos = expectedPosition();
+        send({ type: state.playing ? "play" : "pause", position: pos });
+        break;
+      }
       state = { playing: !!m.playing, position: m.position || 0, serverTime: m.serverTime };
       if (m.by && m.by !== myName) {
         const verb = { play: "oynattı", pause: "durdurdu", seek: "sardı" }[m.text];
