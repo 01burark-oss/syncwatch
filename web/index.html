@@ -3,65 +3,103 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#14121a">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SyncWatch</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Giriş ekranı -->
-  <section id="join" class="card">
-    <h1>SyncWatch</h1>
-    <p class="muted">Aynı dosyayı ikiniz de seçin, gerisini senkron halleder.</p>
-    <form id="joinForm">
-      <label>Adın <input id="nameInput" maxlength="32" required autocomplete="nickname"></label>
-      <label>Oda <input id="roomInput" maxlength="64" required placeholder="ornek: bizim-oda"></label>
-      <button type="submit">Odaya gir</button>
-    </form>
+  <!-- Giriş -->
+  <section id="join" class="join">
+    <div class="joinCard">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="currentColor"/><path d="M26 20l18 12-18 12z" fill="#000000"/></svg>
+      </div>
+      <h1>SyncWatch</h1>
+      <p id="joinLead" class="lead">Uzaktayken de aynı anda izleyin.</p>
+      <form id="joinForm" autocomplete="off">
+        <label class="field">
+          <span>Adın</span>
+          <input id="nameInput" maxlength="32" required autocomplete="nickname" placeholder="Adını yaz">
+        </label>
+        <label id="roomField" class="field">
+          <span>Oda adı</span>
+          <input id="roomInput" maxlength="64" required>
+        </label>
+        <button class="primary big" type="submit">Odaya gir</button>
+      </form>
+      <p class="hint">Video dosyası internete yüklenmez. İkiniz de kendi cihazınızdaki dosyayı seçersiniz.</p>
+    </div>
   </section>
 
-  <!-- Oda ekranı -->
-  <main id="app" hidden>
-    <header>
-      <strong>SyncWatch</strong>
-      <span id="roomLabel" class="muted"></span>
-      <span id="conn" class="pill">bağlanıyor</span>
-      <button id="copyLink" class="ghost" type="button">Davet linki</button>
+  <!-- Oda -->
+  <main id="app" class="app" hidden>
+    <header class="bar">
+      <div class="roomName">
+        <span id="connDot" class="dot" title="Bağlanıyor"></span>
+        <span id="roomLabel"></span>
+      </div>
+      <div id="people" class="people"></div>
+      <button id="copyLink" class="ghost" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+        <span>Davet et</span>
+      </button>
     </header>
 
-    <div class="layout">
-      <div class="player">
-        <div class="videoWrap">
+    <div class="stage">
+      <section class="playerCol">
+        <div id="videoWrap" class="videoWrap empty">
           <video id="video" controls playsinline preload="auto"></video>
-          <div id="placeholder" class="overlay">
-            <p>İzlenecek dosyayı seç</p>
-          </div>
+
+          <label id="placeholder" class="dropzone">
+            <input id="fileInput" type="file" accept="video/*,.mkv,.mp4,.webm,.mov,.m4v">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+            <strong>İzlenecek dosyayı seç</strong>
+            <span>ya da buraya sürükle</span>
+          </label>
+
           <div id="readyOverlay" class="overlay" hidden>
-            <button id="readyBtn" type="button">Hazırım</button>
-            <p class="muted">Tarayıcı oynatmaya izin versin diye bir kez dokun.</p>
+            <button id="readyBtn" class="primary big" type="button">Hazırım</button>
+            <span>Herkes hazır olunca biri oynatsın.</span>
           </div>
+
+          <div id="toast" class="toast" hidden></div>
         </div>
-        <div class="toolbar">
-          <label class="fileBtn">Video seç
-            <input id="fileInput" type="file" accept="video/*,.mkv,.mp4,.webm,.mov">
-          </label>
-          <label class="fileBtn ghost">Altyazı (.srt/.vtt)
+
+        <div id="fileBar" class="fileBar" hidden>
+          <span id="fileName" class="fileName"></span>
+          <span id="syncState" class="syncState"></span>
+          <span class="spacer"></span>
+          <label class="ghost small">
             <input id="subInput" type="file" accept=".srt,.vtt">
+            Altyazı
           </label>
-          <span id="syncInfo" class="muted"></span>
+          <label class="ghost small">
+            <input id="fileInput2" type="file" accept="video/*,.mkv,.mp4,.webm,.mov,.m4v">
+            Değiştir
+          </label>
         </div>
-        <div id="members" class="members"></div>
-        <div id="fileWarn" class="warn" hidden></div>
-      </div>
+
+        <div id="fileWarn" class="notice" hidden></div>
+      </section>
 
       <aside class="chat">
-        <div id="messages" class="messages"></div>
-        <form id="chatForm">
-          <input id="chatInput" maxlength="1000" autocomplete="off" placeholder="Mesaj yaz…">
-          <button type="submit">Gönder</button>
+        <div class="chatHead">Sohbet</div>
+        <div id="messages" class="messages">
+          <p id="chatEmpty" class="chatEmpty">Henüz mesaj yok.</p>
+        </div>
+        <form id="chatForm" class="composer">
+          <input id="chatInput" maxlength="1000" autocomplete="off" placeholder="Bir şey yaz…" enterkeyhint="send">
+          <button class="send" type="submit" aria-label="Gönder">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m0 0-5-5m5 5-5 5"/></svg>
+          </button>
         </form>
       </aside>
     </div>

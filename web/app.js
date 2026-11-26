@@ -6,11 +6,11 @@ const $ = (id) => document.getElementById(id);
 const video = $("video");
 
 // Senkron ayarları
-const HARD_SYNC = 1.0;   // bu kadar saniyeden fazla fark varsa direkt atla
-const SOFT_SYNC = 0.15;  // bunun üstündeki küçük farkları hızla kapat
-const RATE_NUDGE = 0.05; // küçük farklar için hız değişimi (%5)
-const RATE_NUDGE_BIG = 0.1; // 0.5 sn üstü farklar için (%10)
-const LOCAL_GRACE_MS = 1500; // kendi eylemimizden sonra düzeltme yapma süresi
+const HARD_SYNC = 1.0;        // bu kadar saniyeden fazla fark varsa direkt atla
+const SOFT_SYNC = 0.15;       // bunun üstündeki küçük farkları hızla kapat
+const RATE_NUDGE = 0.05;      // küçük farklar için hız değişimi (%5)
+const RATE_NUDGE_BIG = 0.1;   // 0.5 sn üstü farklar için (%10)
+const LOCAL_GRACE_MS = 1500;  // kendi eylemimizden sonra düzeltme yapma süresi
 
 let ws = null;
 let myName = "";
@@ -32,10 +32,21 @@ let members = [];
 const serverNow = () => Date.now() + clockOffset;
 
 // ---------- Giriş ----------
+const ROOM_WORDS = ["film-gecesi", "patlamis-misir", "battaniye", "gece-seansi", "koltuk", "dizi-maratonu"];
+
 (function initJoin() {
-  const params = new URLSearchParams(location.search);
+  const invited = new URLSearchParams(location.search).get("oda");
   $("nameInput").value = safeGet("sw-name") || "";
-  $("roomInput").value = params.get("oda") || safeGet("sw-room") || "";
+  if (invited) {
+    $("roomInput").value = invited;
+    $("roomField").hidden = true;
+    $("joinLead").textContent = `“${invited}” odasına davet edildin.`;
+  } else {
+    $("roomInput").value = safeGet("sw-room") ||
+      ROOM_WORDS[Math.floor(Math.random() * ROOM_WORDS.length)] + "-" + Math.floor(10 + Math.random() * 90);
+  }
+  if ($("nameInput").value) $("nameInput").select();
+
   $("joinForm").addEventListener("submit", (e) => {
     e.preventDefault();
     myName = $("nameInput").value.trim();
@@ -46,7 +57,9 @@ const serverNow = () => Date.now() + clockOffset;
     history.replaceState(null, "", "?oda=" + encodeURIComponent(roomId));
     $("join").hidden = true;
     $("app").hidden = false;
-    $("roomLabel").textContent = "Oda: " + roomId;
+    $("roomLabel").textContent = roomId;
+    document.title = roomId + " · SyncWatch";
+    renderPeople();
     connect();
   });
 })();
@@ -57,10 +70,15 @@ function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 $("copyLink").addEventListener("click", async () => {
   const link = location.origin + location.pathname + "?oda=" + encodeURIComponent(roomId);
   try {
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+      await navigator.share({ title: "SyncWatch", text: "Birlikte izleyelim mi?", url: link });
+      return;
+    }
     await navigator.clipboard.writeText(link);
-    addSystem("Davet linki kopyalandı");
-  } catch {
-    addSystem("Davet linki: " + link);
+    toast("Davet linki kopyalandı");
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+    window.prompt("Bu linki gönder:", link);
   }
 });
 
@@ -69,10 +87,9 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws?room=${encodeURIComponent(roomId)}&name=${encodeURIComponent(myName)}`;
   ws = new WebSocket(url);
-  setConn("bağlanıyor", "");
 
   ws.onopen = () => {
-    setConn("bağlı", "ok");
+    setConn(true);
     reconnectDelay = 1000;
     bestRtt = Infinity;
     for (let i = 0; i < 5; i++) setTimeout(sendPing, i * 200);
@@ -84,7 +101,7 @@ function connect() {
     onMessage(m);
   };
   ws.onclose = () => {
-    setConn("bağlantı koptu, tekrar deneniyor", "bad");
+    setConn(false);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
   };
@@ -94,10 +111,16 @@ function send(m) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
 }
 
-function setConn(text, cls) {
-  const el = $("conn");
-  el.textContent = text;
-  el.className = "pill " + cls;
+let wasConnected = false;
+function setConn(ok) {
+  const dot = $("connDot");
+  dot.classList.toggle("ok", ok);
+  dot.title = ok ? "Bağlı" : "Bağlantı bekleniyor";
+  if (!ok && wasConnected) toast("Bağlantı koptu, yeniden bağlanıyor…");
+  if (ok && wasConnected === "lost") toast("Yeniden bağlandı");
+  wasConnected = ok ? true : (wasConnected ? "lost" : false);
+  if (!ok) members = [];
+  renderPeople();
 }
 
 function sendPing() { send({ type: "ping", t: Date.now() }); }
@@ -120,8 +143,8 @@ function onMessage(m) {
     case "state":
       state = { playing: !!m.playing, position: m.position || 0, serverTime: m.serverTime };
       if (m.by && m.by !== myName) {
-        const verb = { play: "oynattı", pause: "durdurdu", seek: "sardı" }[m.text] || "değiştirdi";
-        addSystem(`${m.by} ${verb} (${fmtTime(m.position || 0)})`);
+        const verb = { play: "oynattı", pause: "durdurdu", seek: "sardı" }[m.text];
+        if (verb) toast(`${m.by} ${verb} · ${fmtTime(m.position || 0)}`);
       }
       applyState(true);
       break;
@@ -133,7 +156,8 @@ function onMessage(m) {
       break;
     case "presence":
       members = m.members || [];
-      renderMembers();
+      renderPeople();
+      checkFiles();
       break;
   }
 }
@@ -194,9 +218,21 @@ function applyState(force) {
   } else {
     video.playbackRate = 1;
   }
-  $("syncInfo").textContent = state.playing ? `fark: ${(diff * 1000).toFixed(0)} ms` : "";
+  setSync(Math.abs(diff) <= 0.5);
 }
 setInterval(() => applyState(false), 500);
+
+function setSync(ok) {
+  const el = $("syncState");
+  const others = members.filter((m) => m.name !== myName).length;
+  if (!others) {
+    el.className = "syncState";
+    el.textContent = "Yalnız izliyorsun";
+    return;
+  }
+  el.className = "syncState " + (ok ? "ok" : "wait");
+  el.textContent = ok ? "Senkron" : "Eşitleniyor…";
+}
 
 // Kullanıcının kendi eylemi: sunucuya bildir ve yerel durumu hemen güncelle.
 function localAction(type) {
@@ -235,27 +271,56 @@ $("readyBtn").addEventListener("click", () => {
 });
 
 // ---------- Dosyalar ----------
-$("fileInput").addEventListener("change", () => {
-  const f = $("fileInput").files[0];
+function loadFile(f) {
   if (!f) return;
   fileLoaded = false;
   unlocked = false;
   if (video.src) URL.revokeObjectURL(video.src);
   video.src = URL.createObjectURL(f);
+  $("videoWrap").classList.remove("empty");
   $("placeholder").hidden = true;
-  video.addEventListener("loadedmetadata", () => {
+  $("fileBar").hidden = false;
+  $("fileName").textContent = f.name;
+  $("fileName").title = f.name;
+
+  const onMeta = () => {
+    video.removeEventListener("error", onError);
     fileLoaded = true;
     myFile = { name: f.name, size: f.size, duration: video.duration || 0 };
     send({ type: "file", file: myFile });
     $("readyOverlay").hidden = false;
-  }, { once: true });
-  video.addEventListener("error", () => {
-    addSystem("Bu dosya tarayıcıda oynatılamıyor. MP4 (H.264 + AAC) olarak dönüştürmeyi dene.");
-  }, { once: true });
+    checkFiles();
+  };
+  const onError = () => {
+    video.removeEventListener("loadedmetadata", onMeta);
+    $("videoWrap").classList.add("empty");
+    $("placeholder").hidden = false;
+    $("fileBar").hidden = true;
+    showNotice("Bu dosya tarayıcıda açılamadı. Dosyayı MP4'e çevirip tekrar dene.");
+  };
+  video.addEventListener("loadedmetadata", onMeta, { once: true });
+  video.addEventListener("error", onError, { once: true });
+}
+
+for (const id of ["fileInput", "fileInput2"]) {
+  $(id).addEventListener("change", (e) => { loadFile(e.target.files[0]); e.target.value = ""; });
+}
+
+// Sürükle-bırak
+const wrap = $("videoWrap");
+wrap.addEventListener("dragover", (e) => { e.preventDefault(); wrap.classList.add("dragging"); });
+wrap.addEventListener("dragleave", () => wrap.classList.remove("dragging"));
+wrap.addEventListener("drop", (e) => {
+  e.preventDefault();
+  wrap.classList.remove("dragging");
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  if (/\.(srt|vtt)$/i.test(f.name)) loadSubtitle(f); else loadFile(f);
 });
 
-$("subInput").addEventListener("change", async () => {
-  const f = $("subInput").files[0];
+$("subInput").addEventListener("change", (e) => { loadSubtitle(e.target.files[0]); e.target.value = ""; });
+
+async function loadSubtitle(f) {
   if (!f) return;
   let text = await f.text();
   if (!/\.vtt$/i.test(f.name)) text = srtToVtt(text);
@@ -271,8 +336,8 @@ $("subInput").addEventListener("change", async () => {
   track.default = true;
   video.appendChild(track);
   track.track.mode = "showing";
-  addSystem("Altyazı yüklendi: " + f.name);
-});
+  toast("Altyazı eklendi");
+}
 
 function srtToVtt(srt) {
   return "WEBVTT\n\n" + srt
@@ -281,33 +346,58 @@ function srtToVtt(srt) {
     .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
 }
 
-function renderMembers() {
-  const box = $("members");
+// ---------- Odadakiler ----------
+function renderPeople() {
+  const box = $("people");
   box.textContent = "";
-  for (const m of members) {
+  const others = members.filter((m) => m.name !== myName);
+  if (!others.length) {
     const s = document.createElement("span");
-    s.textContent = m.name + (m.file ? ` · ${m.file.name} (${fmtTime(m.file.duration)})` : " · dosya seçmedi");
+    s.className = "person";
+    s.textContent = "Karşı taraf bekleniyor";
+    box.appendChild(s);
+    return;
+  }
+  for (const m of others) {
+    const s = document.createElement("span");
+    s.className = "person";
+    const d = document.createElement("span");
+    d.className = "dot" + (m.file ? " ok" : "");
+    s.appendChild(d);
+    s.appendChild(document.createTextNode(m.name));
+    s.title = m.file ? `${m.file.name} seçti` : "Henüz dosya seçmedi";
     box.appendChild(s);
   }
-  // Dosya karşılaştırma: süre 1 sn'den fazla farklıysa ya da boyut farklıysa uyar.
-  const files = members.filter((m) => m.file).map((m) => m.file);
-  const warn = $("fileWarn");
-  if (files.length >= 2) {
-    const a = files[0];
-    const durDiff = files.some((f) => Math.abs(f.duration - a.duration) > 1);
-    const sizeDiff = files.some((f) => f.size !== a.size);
-    if (durDiff) {
-      warn.textContent = "Dosyaların süreleri farklı. Farklı sürümler olabilir, senkron kayabilir.";
-      warn.hidden = false;
-    } else if (sizeDiff) {
-      warn.textContent = "Süreler aynı ama dosya boyutları farklı. Büyük ihtimalle sorun olmaz.";
-      warn.hidden = false;
-    } else {
-      warn.hidden = true;
-    }
+}
+
+// Dosya karşılaştırma: süreler 1 sn'den fazla farklıysa uyar.
+function checkFiles() {
+  if (!myFile) { showNotice(""); return; }
+  const others = members.filter((m) => m.name !== myName && m.file);
+  const odd = others.find((m) => Math.abs(m.file.duration - myFile.duration) > 1);
+  if (odd) {
+    showNotice(`${odd.name} farklı uzunlukta bir dosya seçmiş (${fmtTime(odd.file.duration)}, seninki ${fmtTime(myFile.duration)}). Aynı bölüm olduğundan emin olun, yoksa sahneler kayar.`);
   } else {
-    warn.hidden = true;
+    showNotice("");
   }
+}
+
+function showNotice(text) {
+  const el = $("fileWarn");
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+// ---------- Bildirim ----------
+let toastTimer = 0;
+function toast(text) {
+  const el = $("toast");
+  el.hidden = true;
+  void el.offsetWidth; // animasyonu baştan başlat
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2400);
 }
 
 // ---------- Sohbet ----------
@@ -319,26 +409,33 @@ $("chatForm").addEventListener("submit", (e) => {
   $("chatInput").value = "";
 });
 
+let lastSender = null;
 function addChat(from, text, mine) {
+  if (from !== lastSender) {
+    const who = document.createElement("div");
+    who.className = "who" + (mine ? " mine" : "");
+    who.textContent = mine ? "Sen" : from;
+    appendMsg(who);
+    lastSender = from;
+  }
   const div = document.createElement("div");
   div.className = "msg" + (mine ? " mine" : "");
-  const b = document.createElement("b");
-  b.textContent = from;
-  div.appendChild(b);
-  div.appendChild(document.createTextNode(text));
+  div.textContent = text;
   appendMsg(div);
 }
 
 function addSystem(text) {
+  lastSender = null;
   const div = document.createElement("div");
-  div.className = "msg sys";
+  div.className = "sys";
   div.textContent = text;
   appendMsg(div);
 }
 
 function appendMsg(el) {
+  $("chatEmpty").hidden = true;
   const box = $("messages");
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
   box.appendChild(el);
   if (atBottom) box.scrollTop = box.scrollHeight;
 }

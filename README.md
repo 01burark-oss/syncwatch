@@ -61,6 +61,7 @@ Bağlantı: `/ws?room=<oda>&name=<ad>`
 ## Yol haritası
 
 - [x] Oda + senkron oynatma + yazılı sohbet
+- [x] Sade arayüz (siyah zemin, yeşil vurgu), sürükle-bırak, davet linki
 - [ ] Sunucuyu yayına alma (HTTPS)
 - [ ] Sesli sohbet (WebRTC, yalnızca ses; STUN/TURN gerekir)
 - [ ] Gerekirse her formatı oynatan masaüstü istemci (Tauri + mpv)
