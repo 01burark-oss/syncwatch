@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14121a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>SyncWatch</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Giriş ekranı -->
+  <section id="join" class="card">
+    <h1>SyncWatch</h1>
+    <p class="muted">Aynı dosyayı ikiniz de seçin, gerisini senkron halleder.</p>
+    <form id="joinForm">
+      <label>Adın <input id="nameInput" maxlength="32" required autocomplete="nickname"></label>
+      <label>Oda <input id="roomInput" maxlength="64" required placeholder="ornek: bizim-oda"></label>
+      <button type="submit">Odaya gir</button>
+    </form>
+  </section>
+
+  <!-- Oda ekranı -->
+  <main id="app" hidden>
+    <header>
+      <strong>SyncWatch</strong>
+      <span id="roomLabel" class="muted"></span>
+      <span id="conn" class="pill">bağlanıyor</span>
+      <button id="copyLink" class="ghost" type="button">Davet linki</button>
+    </header>
+
+    <div class="layout">
+      <div class="player">
+        <div class="videoWrap">
+          <video id="video" controls playsinline preload="auto"></video>
+          <div id="placeholder" class="overlay">
+            <p>İzlenecek dosyayı seç</p>
+          </div>
+          <div id="readyOverlay" class="overlay" hidden>
+            <button id="readyBtn" type="button">Hazırım</button>
+            <p class="muted">Tarayıcı oynatmaya izin versin diye bir kez dokun.</p>
+          </div>
+        </div>
+        <div class="toolbar">
+          <label class="fileBtn">Video seç
+            <input id="fileInput" type="file" accept="video/*,.mkv,.mp4,.webm,.mov">
+          </label>
+          <label class="fileBtn ghost">Altyazı (.srt/.vtt)
+            <input id="subInput" type="file" accept=".srt,.vtt">
+          </label>
+          <span id="syncInfo" class="muted"></span>
+        </div>
+        <div id="members" class="members"></div>
+        <div id="fileWarn" class="warn" hidden></div>
+      </div>
+
+      <aside class="chat">
+        <div id="messages" class="messages"></div>
+        <form id="chatForm">
+          <input id="chatInput" maxlength="1000" autocomplete="off" placeholder="Mesaj yaz…">
+          <button type="submit">Gönder</button>
+        </form>
+      </aside>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
