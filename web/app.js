@@ -27,6 +27,8 @@ let expectPaused = true;  // programın beklediği durum; farklıysa kullanıcı
 let ourSeek = false;
 let localActionUntil = 0;
 let myFile = null;
+let myFileObj = null;     // seçilen File; karşı taraf indirmek isterse buradan gönderilir
+let myId = "";
 let members = [];
 
 const serverNow = () => Date.now() + clockOffset;
@@ -164,10 +166,17 @@ function onMessage(m) {
     case "system":
       addSystem(m.text);
       break;
+    case "welcome":
+      myId = m.id;
+      break;
+    case "signal":
+      if (typeof handleSignal === "function") handleSignal(m);
+      break;
     case "presence":
       members = m.members || [];
       renderPeople();
       checkFiles();
+      if (typeof renderOffer === "function") renderOffer();
       break;
   }
 }
@@ -234,7 +243,7 @@ setInterval(() => applyState(false), 500);
 
 function setSync(ok) {
   const el = $("syncState");
-  const others = members.filter((m) => m.name !== myName).length;
+  const others = members.filter((m) => m.id !== myId).length;
   if (!others) {
     el.className = "syncState";
     el.textContent = "Yalnız izliyorsun";
@@ -297,6 +306,8 @@ function loadFile(f) {
     video.removeEventListener("error", onError);
     fileLoaded = true;
     myFile = { name: f.name, size: f.size, duration: video.duration || 0 };
+    myFileObj = f;
+    if (typeof renderOffer === "function") renderOffer();
     send({ type: "file", file: myFile });
     $("readyOverlay").hidden = false;
     checkFiles();
@@ -360,7 +371,7 @@ function srtToVtt(srt) {
 function renderPeople() {
   const box = $("people");
   box.textContent = "";
-  const others = members.filter((m) => m.name !== myName);
+  const others = members.filter((m) => m.id !== myId);
   if (!others.length) {
     const s = document.createElement("span");
     s.className = "person";
@@ -383,7 +394,7 @@ function renderPeople() {
 // Dosya karşılaştırma: süreler 1 sn'den fazla farklıysa uyar.
 function checkFiles() {
   if (!myFile) { showNotice(""); return; }
-  const others = members.filter((m) => m.name !== myName && m.file);
+  const others = members.filter((m) => m.id !== myId && m.file);
   const odd = others.find((m) => Math.abs(m.file.duration - myFile.duration) > 1);
   if (odd) {
     showNotice(`${odd.name} farklı uzunlukta bir dosya seçmiş (${fmtTime(odd.file.duration)}, seninki ${fmtTime(myFile.duration)}). Aynı bölüm olduğundan emin olun, yoksa sahneler kayar.`);

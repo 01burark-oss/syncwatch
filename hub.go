@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -17,7 +19,7 @@ const (
 	maxNameLen   = 32
 	maxRoomLen   = 64
 	maxChatLen   = 1000
-	maxMsgBytes  = 8 << 10
+	maxMsgBytes  = 64 << 10 // WebRTC SDP mesajları birkaç KB olabilir
 	sendQueueLen = 64
 	pingInterval = 25 * time.Second
 )
@@ -47,6 +49,13 @@ type Message struct {
 
 	// ping / pong
 	T int64 `json:"t,omitempty"`
+
+	// welcome / signal: cihazdan cihaza dosya aktarımı için WebRTC sinyalleşmesi.
+	// Sunucu içeriğe bakmaz, yalnızca hedef kişiye iletir.
+	ID     string          `json:"id,omitempty"`
+	To     string          `json:"to,omitempty"`
+	FromID string          `json:"fromId,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 type FileInfo struct {
@@ -56,11 +65,13 @@ type FileInfo struct {
 }
 
 type Member struct {
+	ID   string    `json:"id"`
 	Name string    `json:"name"`
 	File *FileInfo `json:"file,omitempty"`
 }
 
 type client struct {
+	id   string
 	name string
 	file *FileInfo
 	send chan Message
@@ -94,7 +105,7 @@ func (r *room) currentPosition(at int64) float64 {
 func (r *room) presence() Message {
 	m := Message{Type: "presence", Members: []Member{}}
 	for c := range r.clients {
-		m.Members = append(m.Members, Member{Name: c.name, File: c.file})
+		m.Members = append(m.Members, Member{ID: c.id, Name: c.name, File: c.file})
 	}
 	return m
 }
@@ -128,6 +139,7 @@ func (h *Hub) join(id string, c *client) *room {
 
 	r.mu.Lock()
 	r.clients[c] = struct{}{}
+	c.send <- Message{Type: "welcome", ID: c.id}
 	c.send <- r.stateMsg("")
 	r.broadcast(Message{Type: "system", Text: c.name + " odaya katıldı", Time: nowMs()})
 	r.broadcast(r.presence())
@@ -185,7 +197,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
 
-	c := &client{name: name, send: make(chan Message, sendQueueLen)}
+	c := &client{id: newID(), name: name, send: make(chan Message, sendQueueLen)}
 	r := h.join(roomID, c)
 	defer h.leave(roomID, r, c)
 	log.Printf("oda=%q katıldı: %s", roomID, name)
@@ -281,5 +293,33 @@ func (h *Hub) handle(r *room, c *client, m Message) {
 		c.file = &f
 		r.broadcast(r.presence())
 		r.mu.Unlock()
+
+	case "signal":
+		if m.To == "" || len(m.Data) == 0 {
+			return
+		}
+		out := Message{Type: "signal", FromID: c.id, From: c.name, Data: m.Data}
+		var target *client
+		r.mu.Lock()
+		for other := range r.clients {
+			if other.id == m.To {
+				target = other
+				break
+			}
+		}
+		r.mu.Unlock()
+		if target != nil {
+			// Sinyal mesajları kaybolmamalı; kuyruk doluysa kısa süre bekle.
+			select {
+			case target.send <- out:
+			case <-time.After(2 * time.Second):
+			}
+		}
 	}
+}
+
+func newID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
