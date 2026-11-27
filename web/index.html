@@ -42,9 +42,9 @@
   <!-- Oda -->
   <main id="app" class="app" hidden>
     <header class="bar">
-      <div class="roomName">
-        <span id="connDot" class="dot" title="Bağlanıyor"></span>
-        <span id="roomLabel"></span>
+      <div class="roomInfo">
+        <span id="roomLabel" class="roomLabel"></span>
+        <span class="roomSub"><span id="connDot" class="dot" title="Bağlanıyor"></span><span id="roomSub">Bağlanıyor…</span></span>
       </div>
       <div id="people" class="people"></div>
       <button id="copyLink" class="ghost" type="button">
@@ -96,18 +96,22 @@
           <span id="fileName" class="fileName"></span>
           <span id="syncState" class="syncState"></span>
           <span id="uploadInfo" class="uploadInfo" hidden></span>
-          <button id="uploadBtn" class="ghost small" type="button" hidden>Odaya yükle</button>
+          <button id="uploadBtn" class="ghost small deskOnly" type="button" hidden>Odaya yükle</button>
           <span class="spacer"></span>
-          <a id="saveLink" class="ghost small" hidden>Cihaza kaydet</a>
-          <label class="ghost small">
+          <a id="saveLink" class="ghost small deskOnly" hidden>Cihaza kaydet</a>
+          <label class="ghost small deskOnly">
             <input id="subInput" type="file" accept=".srt,.vtt">
             Altyazı
           </label>
-          <label class="ghost small">
+          <label class="ghost small deskOnly">
             <input id="fileInput2" type="file" accept="video/*,.mkv,.mp4,.webm,.mov,.m4v">
             Değiştir
           </label>
+          <button id="moreBtn" class="iconBtn mobileOnly" type="button" aria-label="Seçenekler">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>
+          </button>
         </div>
+        <div id="upProgress" class="upProgress" hidden><div></div></div>
 
         <div id="fileWarn" class="notice" hidden></div>
       </section>
@@ -126,6 +130,35 @@
       </aside>
     </div>
   </main>
+
+  <!-- Telefonda seçenekler alttan açılan panelde -->
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheetBackdrop" data-close></div>
+    <div class="sheetPanel" role="dialog" aria-label="Seçenekler">
+      <div class="sheetGrip"></div>
+      <p id="sheetFile" class="sheetFile"></p>
+      <button id="sUpload" class="sheetRow" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a5 5 0 0 1-.6-9.96A6 6 0 0 1 18 9a4 4 0 0 1-.5 8M12 12v9m0-9-3 3m3-3 3 3"/></svg>
+        <span><strong id="sUploadTitle">Odaya yükle</strong><small id="sUploadSub">Karşı taraf istediği zaman indirebilir</small></span>
+      </button>
+      <button id="sSub" class="sheetRow" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 13h4M13 13h4M7 16h7"/></svg>
+        <span><strong>Altyazı ekle</strong><small>.srt veya .vtt dosyası</small></span>
+      </button>
+      <button id="sChange" class="sheetRow" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 7l4-4M4 7l4 4M20 17H4m16 0-4-4m4 4-4 4"/></svg>
+        <span><strong>Başka dosya seç</strong></span>
+      </button>
+      <a id="sSave" class="sheetRow" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>
+        <span><strong>Cihaza kaydet</strong></span>
+      </a>
+      <button id="sInvite" class="sheetRow" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+        <span><strong>Davet linkini paylaş</strong></span>
+      </button>
+    </div>
+  </div>
 
   <script src="app.js"></script>
   <script src="transfer.js"></script>

@@ -448,6 +448,10 @@ function sharedMatchesMine() {
 function renderUploadUi() {
   const btn = $("uploadBtn");
   const info = $("uploadInfo");
+  const bar = $("upProgress");
+  bar.hidden = !upload;
+  if (upload) bar.firstElementChild.style.width = Math.min(100, (upload.sent / upload.file.size) * 100).toFixed(1) + "%";
+  bar.classList.toggle("paused", !!upload && upload.state !== "uploading");
   if (upload) {
     btn.hidden = false;
     if (upload.state === "uploading") {

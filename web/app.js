@@ -118,7 +118,9 @@ function send(m) {
 }
 
 let wasConnected = false;
+let connected = false;
 function setConn(ok) {
+  connected = ok;
   const dot = $("connDot");
   dot.classList.toggle("ok", ok);
   dot.title = ok ? "Bağlı" : "Bağlantı bekleniyor";
@@ -377,28 +379,71 @@ function srtToVtt(srt) {
 }
 
 // ---------- Odadakiler ----------
+// Odadakiler: üst çubukta baş harfli yuvarlak avatarlar.
+const AVATAR_COLORS = ["#4fcf7f", "#6aa9ff", "#f2b84b", "#ff7d8a", "#b48cff", "#4fd1c5"];
+function avatarColor(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+function initials(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const a = parts[0] ? [...parts[0]][0] : "?";
+  const b = parts.length > 1 ? [...parts[parts.length - 1]][0] : "";
+  return (a + b).toLocaleUpperCase("tr");
+}
+
 function renderPeople() {
   const box = $("people");
   box.textContent = "";
   const others = members.filter((m) => m.id !== myId);
-  if (!others.length) {
+  const sub = $("roomSub");
+  if (!connected) sub.textContent = "Bağlanıyor…";
+  else if (!others.length) sub.textContent = "Karşı taraf bekleniyor";
+  else if (others.length === 1) sub.textContent = `${others[0].name} burada`;
+  else sub.textContent = `${others.length + 1} kişi burada`;
+
+  for (const m of others.slice(0, 4)) {
     const s = document.createElement("span");
-    s.className = "person";
-    s.textContent = "Karşı taraf bekleniyor";
+    s.className = "avatar" + (m.file ? " ready" : "");
+    s.style.setProperty("--c", avatarColor(m.name));
+    s.textContent = initials(m.name);
+    s.title = m.name + (m.file ? ` · ${m.file.name}` : " · henüz dosya seçmedi");
     box.appendChild(s);
-    return;
   }
-  for (const m of others) {
+  if (others.length > 4) {
     const s = document.createElement("span");
-    s.className = "person";
-    const d = document.createElement("span");
-    d.className = "dot" + (m.file ? " ok" : "");
-    s.appendChild(d);
-    s.appendChild(document.createTextNode(m.name));
-    s.title = m.file ? `${m.file.name} seçti` : "Henüz dosya seçmedi";
+    s.className = "avatar more";
+    s.textContent = "+" + (others.length - 4);
     box.appendChild(s);
   }
 }
+
+// ---------- Telefon: seçenekler paneli ----------
+function openSheet() {
+  const up = $("uploadBtn");
+  $("sheetFile").textContent = myFileObj ? myFileObj.name : "";
+  $("sUpload").hidden = up.hidden;
+  $("sUploadTitle").textContent = up.textContent;
+  $("sUploadSub").hidden = up.textContent !== "Odaya yükle";
+  const save = $("saveLink");
+  $("sSave").hidden = save.hidden;
+  if (!save.hidden) { $("sSave").href = save.href; $("sSave").download = save.download; }
+  $("sheet").hidden = false;
+  requestAnimationFrame(() => $("sheet").classList.add("open"));
+}
+function closeSheet() {
+  const sh = $("sheet");
+  sh.classList.remove("open");
+  setTimeout(() => { sh.hidden = true; }, 200);
+}
+$("moreBtn").addEventListener("click", openSheet);
+$("sheet").addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeSheet(); });
+$("sUpload").addEventListener("click", () => { closeSheet(); $("uploadBtn").click(); });
+$("sSub").addEventListener("click", () => { closeSheet(); $("subInput").click(); });
+$("sChange").addEventListener("click", () => { closeSheet(); $("fileInput2").click(); });
+$("sSave").addEventListener("click", () => closeSheet());
+$("sInvite").addEventListener("click", () => { closeSheet(); $("copyLink").click(); });
 
 // Dosya karşılaştırma: süreler 1 sn'den fazla farklıysa uyar.
 function checkFiles() {
