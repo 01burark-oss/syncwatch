@@ -17,5 +17,8 @@
   // Odaya yüklenen video dosyaları.
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "syncwatch-files" }],
 
+  // Panelden eklenen değişkenler (ör. TURN anahtarları) yeni yayında silinmesin.
+  "keep_vars": true,
+
   "observability": { "enabled": true }
 }
