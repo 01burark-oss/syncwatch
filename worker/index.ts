@@ -177,10 +177,19 @@ function guessType(name: string): string {
   )[ext] || "application/octet-stream";
 }
 
+async function netTag(req: Request, salt: string): Promise<string> {
+  const ip = req.headers.get("CF-Connecting-IP");
+  if (!ip) return "";
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + "|" + ip));
+  return [...new Uint8Array(buf).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // ---------- Oda ----------
 type FileInfo = { name: string; size: number; duration: number };
 type Shared = { key: string; name: string; size: number; by: string };
-type Attachment = { id: string; name: string; file: FileInfo | null; voice?: boolean };
+// net: aynı ağdan bağlananları (ör. aynı odada iki cihaz) fark etmek için IP'nin
+// odaya özel kısa özeti. IP'nin kendisi saklanmaz ve paylaşılmaz.
+type Attachment = { id: string; name: string; file: FileInfo | null; voice?: boolean; net?: string };
 type PlayState = { playing: boolean; position: number; serverTime: number; touched: boolean };
 
 export class Room extends DurableObject<Env> {
@@ -202,7 +211,7 @@ export class Room extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    const me: Attachment = { id: randomId(), name, file: null };
+    const me: Attachment = { id: randomId(), name, file: null, net: await netTag(req, this.ctx.id.toString()) };
     server.serializeAttachment(me);
 
     this.sendTo(server, { type: "welcome", id: me.id, storage: !!this.env.FILES, shared: this.shared });
@@ -323,7 +332,7 @@ export class Room extends DurableObject<Env> {
       type: "presence",
       members: sockets.map((w) => {
         const a = w.deserializeAttachment() as Attachment;
-        return { id: a.id, name: a.name, file: a.file, voice: !!a.voice };
+        return { id: a.id, name: a.name, file: a.file, voice: !!a.voice, net: a.net || "" };
       }),
     };
   }
