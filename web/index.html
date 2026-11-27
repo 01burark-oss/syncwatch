@@ -47,6 +47,10 @@
         <span class="roomSub"><span id="connDot" class="dot" title="Bağlanıyor"></span><span id="roomSub">Bağlanıyor…</span></span>
       </div>
       <div id="people" class="people"></div>
+      <button id="voiceBtn" class="iconBtn voiceBtn" type="button" aria-pressed="false" title="Sesli sohbete katıl">
+        <svg class="micOn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <svg class="micOff" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path d="M4 4l16 16"/></svg>
+      </button>
       <button id="copyLink" class="ghost" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
         <span>Davet et</span>
@@ -162,5 +166,6 @@
 
   <script src="app.js"></script>
   <script src="transfer.js"></script>
+  <script src="voice.js"></script>
 </body>
 </html>

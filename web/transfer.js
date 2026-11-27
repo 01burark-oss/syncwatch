@@ -6,7 +6,18 @@
 //   myId, members, myFile, myFileObj, send, loadFile, toast, $
 "use strict";
 
-const ICE_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+// Bağlantı sunucuları sunucudan alınır (TURN tanımlıysa onu da içerir).
+const ICE_FALLBACK = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+let iceServersCache = null;
+let iceFetchedAt = 0;
+function loadIceServers() {
+  if (iceServersCache && Date.now() - iceFetchedAt < 12 * 3600 * 1000) return Promise.resolve(iceServersCache);
+  return fetch("/api/ice")
+    .then((r) => r.json())
+    .then((d) => { iceServersCache = d.iceServers || ICE_FALLBACK; iceFetchedAt = Date.now(); return iceServersCache; })
+    .catch(() => ICE_FALLBACK);
+}
+loadIceServers();
 const CHUNK = 64 * 1024;
 const HIGH_WATER = 4 * 1024 * 1024;   // gönderim tamponu bu kadar dolunca bekle
 const LOW_WATER = 1 * 1024 * 1024;
@@ -19,7 +30,7 @@ function sendSignal(to, data) {
 }
 
 function newPc(peerId) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers: iceServersCache || ICE_FALLBACK });
   pc.onicecandidate = (e) => {
     if (e.candidate) sendSignal(peerId, { kind: "ice", candidate: e.candidate });
   };

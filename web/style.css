@@ -341,3 +341,20 @@ a.ghost { text-decoration: none; }
   .send { width: 40px; height: 40px; }
   .toast { top: 10px; font-size: 12px; }
 }
+
+/* ---------- Sesli sohbet ---------- */
+.voiceBtn { position: relative; margin-left: 4px; }
+.voiceBtn .micOn { display: none; }
+.voiceBtn.on { background: var(--accent); color: var(--accent-ink); }
+.voiceBtn.on .micOn { display: block; }
+.voiceBtn.on .micOff { display: none; }
+.voiceBtn.busy { opacity: .6; pointer-events: none; }
+.voiceBtn.invite::after {
+  content: ""; position: absolute; top: 1px; right: 1px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--bg);
+}
+.avatar.inVoice { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px rgba(79, 207, 127, .55); }
+.avatar.speaking { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); animation: talk 1s ease-in-out infinite; }
+@keyframes talk { 50% { box-shadow: 0 0 0 2px var(--bg), 0 0 0 6px rgba(79, 207, 127, .5); } }
+.avatar.inVoice + .avatar, .avatar.speaking + .avatar { margin-left: -4px; }

@@ -181,12 +181,15 @@ function onMessage(m) {
       if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
       break;
     case "signal":
-      if (typeof handleSignal === "function") handleSignal(m);
+      if (m.data && typeof m.data.kind === "string" && m.data.kind.startsWith("v-")) {
+        if (typeof handleVoiceSignal === "function") handleVoiceSignal(m);
+      } else if (typeof handleSignal === "function") handleSignal(m);
       break;
     case "presence":
       members = m.members || [];
       renderPeople();
       checkFiles();
+      if (typeof onVoicePresence === "function") onVoicePresence();
       if (typeof renderOffer === "function") renderOffer();
       break;
   }
@@ -405,10 +408,11 @@ function renderPeople() {
 
   for (const m of others.slice(0, 4)) {
     const s = document.createElement("span");
-    s.className = "avatar" + (m.file ? " ready" : "");
+    s.className = "avatar" + (m.file ? " ready" : "") + (m.voice ? " inVoice" : "");
+    s.dataset.id = m.id;
     s.style.setProperty("--c", avatarColor(m.name));
     s.textContent = initials(m.name);
-    s.title = m.name + (m.file ? ` · ${m.file.name}` : " · henüz dosya seçmedi");
+    s.title = m.name + (m.file ? ` · ${m.file.name}` : " · henüz dosya seçmedi") + (m.voice ? " · sesli sohbette" : "");
     box.appendChild(s);
   }
   if (others.length > 4) {

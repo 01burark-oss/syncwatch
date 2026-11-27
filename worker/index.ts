@@ -9,6 +9,9 @@ import { DurableObject } from "cloudflare:workers";
 export interface Env {
   ROOMS: DurableObjectNamespace<Room>;
   FILES?: R2Bucket;
+  // Cloudflare Realtime TURN (isteğe bağlı). Panelden "secret" olarak eklenir.
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
 }
 
 const MAX_NAME = 32;
@@ -44,6 +47,8 @@ export default {
 
     if (url.pathname === "/healthz") return new Response("ok");
 
+    if (url.pathname === "/api/ice") return iceServers(env);
+
     if (url.pathname.startsWith("/api/")) {
       if (!env.FILES) return json({ error: "Depolama ayarlı değil" }, 503);
       try {
@@ -57,6 +62,33 @@ export default {
     return new Response("Bulunamadı", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+// ---------- ICE / TURN ----------
+// Telefon şebekeleri gibi doğrudan bağlantıya izin vermeyen ağlarda ses ve
+// dosya aktarımı TURN sunucusu üzerinden geçer. Anahtar tanımlı değilse
+// yalnızca STUN döner.
+const STUN = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+
+async function iceServers(env: Env): Promise<Response> {
+  if (env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) {
+    try {
+      const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ ttl: 86400 }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { iceServers: unknown };
+        const list = Array.isArray(data.iceServers) ? data.iceServers : [data.iceServers];
+        return json({ iceServers: list, turn: true });
+      }
+      console.error("TURN", res.status, await res.text());
+    } catch (err) {
+      console.error("TURN", err);
+    }
+  }
+  return json({ iceServers: STUN, turn: false });
+}
 
 // ---------- R2 ----------
 async function api(req: Request, url: URL, env: Env, bucket: R2Bucket): Promise<Response> {
@@ -148,7 +180,7 @@ function guessType(name: string): string {
 // ---------- Oda ----------
 type FileInfo = { name: string; size: number; duration: number };
 type Shared = { key: string; name: string; size: number; by: string };
-type Attachment = { id: string; name: string; file: FileInfo | null };
+type Attachment = { id: string; name: string; file: FileInfo | null; voice?: boolean };
 type PlayState = { playing: boolean; position: number; serverTime: number; touched: boolean };
 
 export class Room extends DurableObject<Env> {
@@ -232,6 +264,14 @@ export class Room extends DurableObject<Env> {
         break;
       }
 
+      case "voice": {
+        // Sesli sohbete katıldı / ayrıldı
+        me.voice = !!m.on;
+        ws.serializeAttachment(me);
+        this.broadcast(this.presence());
+        break;
+      }
+
       case "signal": {
         // Cihazdan cihaza aktarım için WebRTC mesajlarını yalnızca hedefe ilet.
         if (typeof m.to !== "string" || m.data === undefined) return;
@@ -283,7 +323,7 @@ export class Room extends DurableObject<Env> {
       type: "presence",
       members: sockets.map((w) => {
         const a = w.deserializeAttachment() as Attachment;
-        return { id: a.id, name: a.name, file: a.file };
+        return { id: a.id, name: a.name, file: a.file, voice: !!a.voice };
       }),
     };
   }
