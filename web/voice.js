@@ -1,31 +1,60 @@
 // Sesli sohbet (WebRTC, yalnızca ses).
-// Mikrofon sesi gönderilmeden önce tarayıcıda temizlenir: tarayıcının kendi
-// yankı/gürültü engellemesi + RNNoise (yapay zekâ tabanlı gürültü silme) +
-// ani yüksek sesleri bastıran sınırlayıcı. Opus mono 40 kbps, paket kaybına
-// karşı FEC açık; bağlantı zayıflarsa tarayıcı bit hızını kendisi düşürür.
-// Biri konuşurken video sesi otomatik kısılır.
+// Varsayılan: tarayıcının kendi yankı/gürültü engellemesi, mikrofon sesi
+// doğrudan gönderilir (en az gecikme ve bozulma). İsteyen "Güçlü gürültü
+// engelleme"yi açabilir: o zaman tarayıcının engellemesi kapanır ve yerine
+// RNNoise (yapay zekâ tabanlı) çalışır; ikisi üst üste binip konuşmayı kesmesin.
+// Opus mono 64 kbps, paket kaybına karşı FEC açık; bağlantı zayıflarsa tarayıcı
+// bit hızını kendisi düşürür. Biri konuşurken video sesi otomatik kısılır.
 //
 // app.js ve transfer.js'teki genel değişken/fonksiyonları kullanır:
 //   myId, members, send, sendSignal, toast, $, iceServersCache, ICE_FALLBACK,
 //   loadIceServers, video
 "use strict";
 
-const VOICE_BITRATE = 40000;  // Opus ortalama hedef
-const VOICE_MAX_BITRATE = 48000;
+const VOICE_BITRATE = 64000;  // Opus ortalama hedef (Discord ile aynı)
+const VOICE_MAX_BITRATE = 64000;
 const SPEAK_LEVEL = 0.025;   // bu seviyenin üstü "konuşuyor" sayılır
 const DUCK_TO = 0.3;         // konuşma sırasında video sesi bu orana iner
 const DUCK_RELEASE_MS = 900;
+const NS_KEY = "sw-strong-ns";
 
 let voiceOn = false;
-let micStream = null;
-let audioCtx = null;
-let sendStream = null;       // temizlenmiş mikrofon sesi (karşıya giden)
-let micChain = null;         // { nodes, rn }
+let micStream = null;        // mikrofonun kendisi
+let sendStream = null;       // karşıya giden ses (güçlü modda RNNoise çıkışı)
+let micChain = null;         // { ctx, nodes, rn } yalnız güçlü modda
+let audioCtx = null;         // konuşanı algılamak için
+let strongNs = readStrongNs();
 const vpeers = new Map(); // peerId -> { pc, audio, analyser, buf, pendingIce, speaking }
 let seenVoice = new Set();  // önceki presence'ta sesli sohbette olanlar
 
+function readStrongNs() {
+  try { return localStorage.getItem(NS_KEY) === "1"; } catch { return false; }
+}
+
 // ---------- Aç / kapat ----------
-$("voiceBtn").addEventListener("click", () => (voiceOn ? leaveVoice() : joinVoice()));
+$("voiceBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!voiceOn) joinVoice();
+  else toggleVoiceMenu();
+});
+$("vmLeave").addEventListener("click", () => { closeVoiceMenu(); leaveVoice(); });
+$("vmNs").addEventListener("click", () => setStrongNs(!strongNs));
+document.addEventListener("click", (e) => {
+  if (!$("voiceMenu").hidden && !e.target.closest("#voiceMenu")) closeVoiceMenu();
+});
+
+function toggleVoiceMenu() {
+  const m = $("voiceMenu");
+  m.hidden = !m.hidden;
+  renderVoiceMenu();
+}
+function closeVoiceMenu() { $("voiceMenu").hidden = true; }
+function renderVoiceMenu() {
+  $("vmNs").setAttribute("aria-checked", strongNs ? "true" : "false");
+  $("vmNsSub").textContent = strongNs
+    ? "Açık · fan, klavye, sokak sesini siler"
+    : "Kapalı · tarayıcının normal engellemesi çalışıyor";
+}
 
 async function joinVoice() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -35,22 +64,12 @@ async function joinVoice() {
   setVoiceBtn("busy");
   ensureAudioCtx(); // dokunuş anında oluşsun (iOS)
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: { ideal: true },
-        noiseSuppression: { ideal: true },
-        autoGainControl: { ideal: true },
-        voiceIsolation: { ideal: true }, // destekleyen tarayıcılarda (Chrome/Mac)
-        channelCount: { ideal: 1 },
-        sampleRate: { ideal: 48000 },
-      },
-    });
+    await openMic(strongNs);
   } catch {
     setVoiceBtn("off");
     toast("Mikrofon izni verilmedi");
     return;
   }
-  sendStream = await buildSendStream(micStream);
   await loadIceServers();
   voiceOn = true;
   send({ type: "voice", on: true });
@@ -60,72 +79,116 @@ async function joinVoice() {
   syncVoicePeers();
 }
 
-// ---------- Mikrofon sesini temizle ----------
-// mic -> alçak frekans filtresi -> RNNoise -> sınırlayıcı -> karşı taraf.
-// Bir adım çalışmazsa ham (ama tarayıcıda zaten temizlenmiş) ses gider.
-async function buildSendStream(raw) {
-  const ctx = audioCtx;
-  if (!ctx || !ctx.createMediaStreamDestination) return raw;
+// Mikrofonu aç; güçlü modda RNNoise'tan geçir. micStream ve sendStream'i kurar.
+async function openMic(strong) {
+  const mic = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: { ideal: true },
+      noiseSuppression: { ideal: !strong }, // güçlü modda RNNoise yapıyor
+      autoGainControl: { ideal: true },
+      channelCount: { ideal: 1 },
+    },
+  });
+  let out = mic;
+  let chain = null;
+  if (strong) {
+    chain = await buildRnnoiseChain(mic);
+    if (chain) out = chain.stream;
+    else {
+      // Olmadıysa tarayıcının kendi engellemesiyle devam et.
+      mic.getTracks().forEach((t) => t.stop());
+      strongNs = false;
+      toast("Bu cihazda güçlü gürültü engelleme çalışmıyor");
+      return openMic(false);
+    }
+  }
+  micStream = mic;
+  sendStream = out;
+  micChain = chain;
+}
+
+function closeMic() {
+  if (micChain) {
+    for (const n of micChain.nodes) { try { n.disconnect(); } catch {} }
+    try { micChain.rn.port.postMessage("destroy"); } catch {}
+    try { micChain.ctx.close(); } catch {}
+    micChain = null;
+  }
+  if (sendStream && sendStream !== micStream) sendStream.getTracks().forEach((t) => t.stop());
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  micStream = null;
+  sendStream = null;
+}
+
+// Görüşmeyi kesmeden modu değiştir: yeni mikrofon sesini mevcut bağlantılara tak.
+let nsSwitching = false;
+async function setStrongNs(on) {
+  if (nsSwitching) return;
+  strongNs = on;
+  try { localStorage.setItem(NS_KEY, on ? "1" : "0"); } catch {}
+  renderVoiceMenu();
+  if (!voiceOn) return;
+  nsSwitching = true;
+  const old = { micStream, sendStream, micChain };
+  micChain = null;
   try {
+    await openMic(on);
+  } catch {
+    micStream = old.micStream; sendStream = old.sendStream; micChain = old.micChain;
+    nsSwitching = false;
+    toast("Mikrofon değiştirilemedi");
+    return;
+  }
+  const track = sendStream.getAudioTracks()[0];
+  for (const vp of vpeers.values()) {
+    for (const s of vp.pc.getSenders()) {
+      if (s.track && s.track.kind === "audio") await s.replaceTrack(track).catch(() => {});
+    }
+  }
+  // Eskisini kapat.
+  const cur = { micStream, sendStream, micChain };
+  micStream = old.micStream; sendStream = old.sendStream; micChain = old.micChain;
+  closeMic();
+  micStream = cur.micStream; sendStream = cur.sendStream; micChain = cur.micChain;
+  nsSwitching = false;
+  renderVoiceMenu();
+}
+
+// mic -> RNNoise -> karşı taraf. Kendi AudioContext'i, cihazın doğal hızında
+// (RNNoise 48 kHz ister; cihaz farklıysa yeniden örnekleme sesi titretmesin
+// diye hiç açılmaz).
+let rnnoiseWasm = null;
+async function buildRnnoiseChain(mic) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !window.AudioWorkletNode) return null;
+  let ctx = null;
+  try {
+    ctx = new AC({ latencyHint: "interactive" });
+    if (ctx.sampleRate !== 48000 || !ctx.audioWorklet) { ctx.close(); return null; }
     if (ctx.state === "suspended") await ctx.resume().catch(() => {});
-    const src = ctx.createMediaStreamSource(raw);
-
-    const hp = ctx.createBiquadFilter(); // uğultu, masa titreşimi, fan
-    hp.type = "highpass";
-    hp.frequency.value = 90;
-
-    const limiter = ctx.createDynamicsCompressor(); // bağırma, vurma gibi ani sesler
-    limiter.threshold.value = -16;
-    limiter.knee.value = 8;
-    limiter.ratio.value = 12;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.2;
-
+    await ctx.audioWorklet.addModule("vendor/rnnoise/worklet.js");
+    if (!rnnoiseWasm) {
+      const simd = WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
+      const r = await fetch(simd ? "vendor/rnnoise/rnnoise_simd.wasm" : "vendor/rnnoise/rnnoise.wasm");
+      if (!r.ok) throw new Error("wasm " + r.status);
+      rnnoiseWasm = await r.arrayBuffer();
+    }
+    const src = ctx.createMediaStreamSource(mic);
+    const rn = new AudioWorkletNode(ctx, "@sapphi-red/web-noise-suppressor/rnnoise", {
+      channelCount: 1,
+      channelCountMode: "explicit",
+      processorOptions: { maxChannels: 1, wasmBinary: rnnoiseWasm.slice(0) },
+    });
     const dst = ctx.createMediaStreamDestination();
     dst.channelCount = 1;
-
-    let rn = null;
-    if (window.AudioWorkletNode && ctx.audioWorklet && ctx.sampleRate === 48000) {
-      try {
-        rn = await createRnnoise(ctx);
-      } catch (err) {
-        console.warn("[SyncWatch] gürültü engelleme açılamadı", err);
-      }
-    }
-    const chain = rn ? [src, hp, rn, limiter, dst] : [src, hp, limiter, dst];
-    for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]);
-    micChain = { nodes: chain, rn };
-    return dst.stream;
+    src.connect(rn);
+    rn.connect(dst);
+    return { ctx, nodes: [src, rn, dst], rn, stream: dst.stream };
   } catch (err) {
-    console.warn("[SyncWatch] mikrofon işleme", err);
-    return raw;
+    console.warn("[SyncWatch] gürültü engelleme açılamadı", err);
+    try { ctx && ctx.close(); } catch {}
+    return null;
   }
-}
-
-let rnnoiseWasm = null;
-async function createRnnoise(ctx) {
-  if (!ctx._swRnnoise) {
-    ctx._swRnnoise = ctx.audioWorklet.addModule("vendor/rnnoise/worklet.js");
-  }
-  await ctx._swRnnoise;
-  if (!rnnoiseWasm) {
-    const simd = WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
-    const r = await fetch(simd ? "vendor/rnnoise/rnnoise_simd.wasm" : "vendor/rnnoise/rnnoise.wasm");
-    if (!r.ok) throw new Error("wasm " + r.status);
-    rnnoiseWasm = await r.arrayBuffer();
-  }
-  return new AudioWorkletNode(ctx, "@sapphi-red/web-noise-suppressor/rnnoise", {
-    channelCount: 1,
-    channelCountMode: "explicit",
-    processorOptions: { maxChannels: 1, wasmBinary: rnnoiseWasm.slice(0) },
-  });
-}
-
-function stopMicChain() {
-  if (!micChain) return;
-  for (const n of micChain.nodes) { try { n.disconnect(); } catch {} }
-  if (micChain.rn) { try { micChain.rn.port.postMessage("destroy"); } catch {} }
-  micChain = null;
 }
 
 // Aynı internet bağlantısından biri sesli sohbette mi (aynı ev/oda olabilir)?
@@ -136,13 +199,10 @@ function sameNetworkPeer() {
 
 function leaveVoice() {
   voiceOn = false;
+  closeVoiceMenu();
   send({ type: "voice", on: false });
   for (const id of [...vpeers.keys()]) closeVoicePeer(id, true);
-  stopMicChain();
-  if (sendStream && sendStream !== micStream) sendStream.getTracks().forEach((t) => t.stop());
-  if (micStream) micStream.getTracks().forEach((t) => t.stop());
-  micStream = null;
-  sendStream = null;
+  closeMic();
   setVoiceBtn("off");
   unduck();
 }
@@ -152,7 +212,7 @@ function setVoiceBtn(state) {
   b.classList.toggle("on", state === "on");
   b.classList.toggle("busy", state === "busy");
   b.setAttribute("aria-pressed", state === "on" ? "true" : "false");
-  b.title = state === "on" ? "Sesli sohbetten çık" : "Sesli sohbete katıl";
+  b.title = state === "on" ? "Ses ayarları" : "Sesli sohbete katıl";
   renderVoiceHint();
 }
 
@@ -297,10 +357,7 @@ function limitBitrate(pc) {
 function ensureAudioCtx() {
   if (!audioCtx) {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) {
-      try { audioCtx = new AC({ sampleRate: 48000, latencyHint: "interactive" }); }
-      catch { audioCtx = new AC(); }
-    }
+    if (AC) audioCtx = new AC();
   }
   if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 }
