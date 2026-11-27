@@ -34,22 +34,41 @@ function closePeer(peerId) {
   try { p.pc.close(); } catch {}
 }
 
-async function handleSignal(m) {
+// Sinyaller sırayla işlenmeli: ICE adayları uzak açıklama ayarlanmadan
+// gelirse kaybolmasın diye kuyruğa alınır.
+let signalChain = Promise.resolve();
+function handleSignal(m) {
+  signalChain = signalChain.then(() => handleSignalNow(m)).catch((err) => console.warn("[SyncWatch] sinyal", err));
+  return signalChain;
+}
+
+async function addIce(p, candidate) {
+  if (!p.pc.remoteDescription) { (p.pendingIce = p.pendingIce || []).push(candidate); return; }
+  await p.pc.addIceCandidate(candidate).catch((err) => console.warn("[SyncWatch] ICE", err));
+}
+
+async function flushIce(p) {
+  const list = p.pendingIce || [];
+  p.pendingIce = [];
+  for (const c of list) await p.pc.addIceCandidate(c).catch(() => {});
+}
+
+async function handleSignalNow(m) {
   const from = m.fromId;
   const d = m.data || {};
   try {
     if (d.kind === "offer") await onOffer(from, m.from, d);
     else if (d.kind === "answer") {
       const p = peers.get(from);
-      if (p) await p.pc.setRemoteDescription({ type: "answer", sdp: d.sdp });
+      if (p) { await p.pc.setRemoteDescription({ type: "answer", sdp: d.sdp }); await flushIce(p); }
     } else if (d.kind === "ice") {
       const p = peers.get(from);
-      if (p && d.candidate) await p.pc.addIceCandidate(d.candidate).catch(() => {});
+      if (p && d.candidate) await addIce(p, d.candidate);
     } else if (d.kind === "reject") {
       if (download && download.peerId === from) failDownload(d.reason || "Karşı taraf dosyayı gönderemedi.");
     }
   } catch (err) {
-    console.warn("signal", err);
+    console.warn("[SyncWatch] sinyal", err);
   }
 }
 
@@ -72,11 +91,18 @@ async function onOffer(peerId, peerName, d) {
     p.channel = ch;
     ch.binaryType = "arraybuffer";
     ch.bufferedAmountLowThreshold = LOW_WATER;
-    ch.onopen = () => streamFile(peerId, peerName, ch, f, Math.max(0, Math.min(d.offset || 0, f.size)));
+    const start = () => {
+      if (p.started) return;
+      p.started = true;
+      streamFile(peerId, peerName, ch, f, Math.max(0, Math.min(d.offset || 0, f.size)));
+    };
+    // Bazı tarayıcılarda kanal "datachannel" olayında zaten açık gelir.
+    if (ch.readyState === "open") start(); else ch.onopen = start;
     ch.onclose = () => { uploads.delete(peerId); renderUploads(); closePeer(peerId); };
   };
 
   await pc.setRemoteDescription({ type: "offer", sdp: d.sdp });
+  await flushIce(p);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendSignal(peerId, { kind: "answer", sdp: answer.sdp });
@@ -107,7 +133,15 @@ async function streamFile(peerId, peerName, ch, file, offset) {
     }
     ch.send(JSON.stringify({ done: true }));
   } catch (err) {
-    console.warn("upload", err);
+    console.warn("[SyncWatch] gönderim", err);
+    // Dosya okunamadıysa (taşındı, değişti, bulut klasöründe vb.) karşıya söyle.
+    const reason = err && err.name === "NotReadableError"
+      ? `${myName} tarafında dosya okunamadı. Dosyayı yeniden seçmesi gerekiyor.`
+      : `${myName} tarafında gönderim durdu.`;
+    try { ch.send(JSON.stringify({ error: reason })); } catch {}
+    showNotice("Dosya okunamadı, karşı taraf indiremiyor. Dosyayı “Değiştir” ile yeniden seç.");
+    uploads.delete(peerId);
+    renderUploads();
   }
 }
 
@@ -187,6 +221,7 @@ async function startDownload(m, resume) {
     if (typeof e.data === "string") {
       let msg; try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.done) finishDownload(dl);
+      else if (msg.error) failDownload(msg.error);
       return;
     }
     dl.sink.write(e.data);
@@ -352,6 +387,14 @@ setInterval(() => {
   const dl = download;
   if (!dl || dl.state !== "receiving") return;
   const now = performance.now();
+  // 20 saniye hiç veri gelmezse takıldı say; "Devam et" kaldığı yerden sürer.
+  if (dl.received !== dl.lastBytes) dl.lastProgress = now;
+  else if (now - (dl.lastProgress || now) > 20000) {
+    failDownload(dl.source === "peer"
+      ? `${dl.peerName} tarafından veri gelmiyor. Onun SyncWatch sekmesi açık ve dosyası seçili olmalı.`
+      : "İndirme durdu.");
+    return;
+  } else if (!dl.lastProgress) dl.lastProgress = now;
   const inst = ((dl.received - dl.lastBytes) * 1000) / (now - dl.lastT);
   dl.speed = dl.speed ? dl.speed * 0.7 + inst * 0.3 : inst;
   dl.lastBytes = dl.received;
