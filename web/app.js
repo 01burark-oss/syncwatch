@@ -306,6 +306,8 @@ $("readyBtn").addEventListener("click", () => {
 // ---------- Dosyalar ----------
 function loadFile(f) {
   if (!f) return;
+  const prev = myFileObj;
+  if (prev) savePos(prev, video.currentTime);
   fileLoaded = false;
   unlocked = false;
   if (video.src) URL.revokeObjectURL(video.src);
@@ -321,6 +323,15 @@ function loadFile(f) {
     fileLoaded = true;
     myFile = { name: f.name, size: f.size, duration: video.duration || 0 };
     myFileObj = f;
+    rememberFile(f);
+    // Başka bir dosyadan geçildiyse ve bu dosyayı odada izleyen yoksa odayı
+    // bu dosyanın kaldığı yere al (durmuş). Biri zaten izliyorsa ona katıl.
+    const watched = members.some((m) => m.id !== myId && sameFile(m.file, myFile));
+    if (prev && fileKey(prev) !== fileKey(f) && !watched) {
+      const pos = loadPos(f);
+      send({ type: "pause", position: pos });
+      if (pos > 5) toast(`Kaldığın yerden: ${fmtTime(pos)}`);
+    }
     if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
     send({ type: "file", file: myFile });
     $("readyOverlay").hidden = false;
@@ -433,6 +444,15 @@ function openSheet() {
   const save = $("saveLink");
   $("sSave").hidden = save.hidden;
   if (!save.hidden) { $("sSave").href = save.href; $("sSave").download = save.download; }
+  const rec = $("sRecent");
+  rec.textContent = "";
+  if (recentFiles.length > 1) {
+    const h = document.createElement("p");
+    h.className = "menuHead";
+    h.textContent = "Son açtıkların";
+    rec.appendChild(h);
+    rec.appendChild(recentRows("sheetRow recentRow", (f) => { closeSheet(); if (f !== myFileObj) loadFile(f); }));
+  }
   $("sheet").hidden = false;
   requestAnimationFrame(() => $("sheet").classList.add("open"));
 }
@@ -449,23 +469,170 @@ $("sChange").addEventListener("click", () => { closeSheet(); $("fileInput2").cli
 $("sSave").addEventListener("click", () => closeSheet());
 $("sInvite").addEventListener("click", () => { closeSheet(); $("copyLink").click(); });
 
-// Dosya karşılaştırma: süreler 1 sn'den fazla farklıysa uyar.
+// Aynı dosya mı? Ad ya da süre tutuyorsa aynı bölüm sayılır.
+function sameFile(a, b) {
+  if (!a || !b) return false;
+  if (a.name === b.name && a.size === b.size) return true;
+  return a.duration > 0 && b.duration > 0 && Math.abs(a.duration - b.duration) <= 1;
+}
+
+// Dosya karşılaştırma: karşı taraf başka bir dosya açtıysa uyar; o dosya
+// bizde de açılmışsa tek dokunuşla ona geçilebilsin.
 function checkFiles() {
+  renderPeopleMenu();
   if (!myFile) { showNotice(""); return; }
   const others = members.filter((m) => m.id !== myId && m.file);
-  const odd = others.find((m) => Math.abs(m.file.duration - myFile.duration) > 1);
-  if (odd) {
-    showNotice(`${odd.name} farklı uzunlukta bir dosya seçmiş (${fmtTime(odd.file.duration)}, seninki ${fmtTime(myFile.duration)}). Aynı bölüm olduğundan emin olun, yoksa sahneler kayar.`);
+  const odd = others.find((m) => !sameFile(m.file, myFile));
+  if (!odd) { showNotice(""); return; }
+  const mine = recentFiles.find((f) => f.name === odd.file.name && f.size === odd.file.size);
+  if (mine) {
+    showNotice(`${odd.name} şu an “${odd.file.name}” izliyor, sen başka dosyadasın.`,
+      { label: "Ona geç", onClick: () => loadFile(mine) });
   } else {
-    showNotice("");
+    showNotice(`${odd.name} başka bir dosya açtı: “${odd.file.name}” (${fmtTime(odd.file.duration)}). Senin açtığın: “${myFile.name}”. Aynı bölümü açın, yoksa sahneler kayar.`);
   }
 }
 
-function showNotice(text) {
+function showNotice(text, action) {
   const el = $("fileWarn");
   el.textContent = text;
+  if (text && action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "noticeBtn";
+    b.textContent = action.label;
+    b.addEventListener("click", action.onClick);
+    el.appendChild(b);
+  }
   el.hidden = !text;
 }
+
+// ---------- Son açılan dosyalar ve kaldığın yer ----------
+// Dosyanın kendisi yalnızca bu sekmede tutulur (tarayıcı dosyayı yeniden
+// açmadan okuyamaz); kaldığın yer ise cihazda saklanır.
+const recentFiles = [];
+const fileKey = (f) => f.name + "|" + f.size;
+
+function rememberFile(f) {
+  const i = recentFiles.findIndex((x) => fileKey(x) === fileKey(f));
+  if (i >= 0) recentFiles.splice(i, 1);
+  recentFiles.unshift(f);
+  if (recentFiles.length > 6) recentFiles.pop();
+}
+function savePos(f, t) {
+  if (!f || !(t >= 0)) return;
+  safeSet("sw-pos:" + fileKey(f), String(Math.floor(t)));
+}
+function loadPos(f) {
+  const v = Number(safeGet("sw-pos:" + fileKey(f)));
+  return v > 0 ? v : 0;
+}
+let lastPosSave = 0;
+video.addEventListener("timeupdate", () => {
+  const now = Date.now();
+  if (!myFileObj || now - lastPosSave < 5000) return;
+  lastPosSave = now;
+  savePos(myFileObj, video.currentTime);
+});
+
+function recentRows(rowClass, onPick) {
+  const frag = document.createDocumentFragment();
+  for (const f of recentFiles) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = rowClass + (myFileObj && fileKey(f) === fileKey(myFileObj) ? " current" : "");
+    const span = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = f.name;
+    span.appendChild(strong);
+    const pos = loadPos(f);
+    if (pos > 5) {
+      const small = document.createElement("small");
+      small.className = "pos";
+      small.textContent = "Kaldığın yer " + fmtTime(pos);
+      span.appendChild(small);
+    }
+    b.appendChild(span);
+    b.addEventListener("click", () => onPick(f));
+    frag.appendChild(b);
+  }
+  return frag;
+}
+
+function openFileMenu() {
+  const others = recentFiles.filter((f) => !myFileObj || fileKey(f) !== fileKey(myFileObj));
+  if (!others.length) { $("fileInput2").click(); return; }
+  const list = $("recentList");
+  list.textContent = "";
+  list.appendChild(recentRows("vmRow", (f) => { closeMenus(); if (f !== myFileObj) loadFile(f); }));
+  $("fileMenu").hidden = false;
+}
+$("changeBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!$("fileMenu").hidden) closeMenus(); else { closeMenus(); openFileMenu(); }
+});
+$("fmPick").addEventListener("click", () => { closeMenus(); $("fileInput2").click(); });
+
+// ---------- Odadakiler ----------
+function renderPeopleMenu() {
+  const list = $("peopleList");
+  if (!list) return;
+  list.textContent = "";
+  const sorted = [...members].sort((a, b) => (a.id === myId ? -1 : b.id === myId ? 1 : 0));
+  for (const m of sorted) {
+    const me = m.id === myId;
+    const row = document.createElement("div");
+    row.className = "pRow";
+    const av = document.createElement("span");
+    av.className = "avatar" + (m.file ? " ready" : "") + (m.voice ? " inVoice" : "");
+    av.dataset.id = m.id;
+    av.style.setProperty("--c", avatarColor(m.name));
+    av.textContent = initials(m.name);
+    const info = document.createElement("span");
+    info.className = "pInfo";
+    const name = document.createElement("strong");
+    name.textContent = m.name;
+    if (me) { const em = document.createElement("em"); em.textContent = " (sen)"; name.appendChild(em); }
+    const sub = document.createElement("small");
+    if (!m.file) sub.textContent = "Henüz dosya seçmedi";
+    else {
+      sub.textContent = m.file.name;
+      if (!me && myFile) sub.className = sameFile(m.file, myFile) ? "same" : "diff";
+    }
+    sub.title = sub.textContent;
+    info.append(name, sub);
+    row.append(av, info);
+    if (m.voice) {
+      const mic = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      mic.setAttribute("viewBox", "0 0 24 24");
+      mic.setAttribute("class", "pMic");
+      mic.innerHTML = '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>';
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      t.textContent = "Sesli sohbette";
+      mic.appendChild(t);
+      row.appendChild(mic);
+    }
+    list.appendChild(row);
+  }
+}
+function togglePeopleMenu(e) {
+  e.stopPropagation();
+  const open = $("peopleMenu").hidden;
+  closeMenus();
+  if (open) { renderPeopleMenu(); $("peopleMenu").hidden = false; }
+}
+$("people").addEventListener("click", togglePeopleMenu);
+document.querySelector(".roomInfo").addEventListener("click", togglePeopleMenu);
+
+function closeMenus() {
+  $("peopleMenu").hidden = true;
+  $("fileMenu").hidden = true;
+  if (typeof closeVoiceMenu === "function") closeVoiceMenu();
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#peopleMenu, #fileMenu")) { $("peopleMenu").hidden = true; $("fileMenu").hidden = true; }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus(); });
 
 // ---------- Bildirim ----------
 let toastTimer = 0;

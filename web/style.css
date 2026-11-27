@@ -387,3 +387,29 @@ a.ghost { text-decoration: none; }
 }
 .vmRow[aria-checked="true"] .switch { background: var(--accent); }
 .vmRow[aria-checked="true"] .switch::after { transform: translateX(16px); }
+
+/* Odadakiler ve son dosyalar menüleri */
+.people { background: none; border: 0; padding: 4px 0 4px 6px; cursor: pointer; border-radius: 999px; }
+.roomInfo { cursor: pointer; }
+.menuHead { margin: 0; padding: 8px 12px 4px; font-size: 12px; color: var(--muted); }
+.peopleMenu { right: 16px; }
+.pRow { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.pRow .avatar { margin-left: 0; flex: none; }
+.pInfo { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pInfo strong { font-weight: 500; font-size: 14px; }
+.pInfo strong em { font-style: normal; color: var(--muted); font-weight: 400; }
+.pInfo small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pInfo small.same { color: var(--ok); }
+.pInfo small.diff { color: var(--wait); }
+.pMic { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.fileBar { position: relative; }
+.fileMenu { top: calc(100% + 6px); right: 0; }
+.vmRow.current strong::after { content: " · açık"; color: var(--accent); font-weight: 400; }
+.vmRow small.pos { color: var(--muted); }
+.notice .noticeBtn {
+  margin-left: 10px; padding: 4px 12px; border: 0; border-radius: 999px;
+  background: var(--wait); color: #1b1200; font: inherit; font-weight: 600; cursor: pointer;
+}
+.sheetRow.current strong::after { content: " · açık"; color: var(--accent); font-weight: 400; }
+.recentRow { padding-left: 44px; }
+.recentRow strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

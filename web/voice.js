@@ -45,6 +45,8 @@ document.addEventListener("click", (e) => {
 
 function toggleVoiceMenu() {
   const m = $("voiceMenu");
+  $("peopleMenu").hidden = true;
+  $("fileMenu").hidden = true;
   m.hidden = !m.hidden;
   renderVoiceMenu();
 }
