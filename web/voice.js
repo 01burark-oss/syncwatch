@@ -24,6 +24,10 @@ let sendStream = null;       // karşıya giden ses (güçlü modda RNNoise çı
 let micChain = null;         // { ctx, nodes, rn } yalnız güçlü modda
 let audioCtx = null;         // konuşanı algılamak için
 let strongNs = readStrongNs();
+// Bas-konuş: varsayılan açık. Mikrofon yalnızca buton basılıyken (ya da V
+// tuşu basılıyken) karşıya ses gönderir.
+let pttMode = (() => { try { return localStorage.getItem("sw-ptt") !== "0"; } catch { return true; } })();
+let pttHeld = false;
 const vpeers = new Map(); // peerId -> { pc, audio, analyser, buf, pendingIce, speaking }
 let seenVoice = new Set();  // önceki presence'ta sesli sohbette olanlar
 
@@ -39,6 +43,41 @@ $("voiceBtn").addEventListener("click", (e) => {
 });
 $("vmLeave").addEventListener("click", () => { closeVoiceMenu(); leaveVoice(); });
 $("vmNs").addEventListener("click", () => setStrongNs(!strongNs));
+$("vmPtt").addEventListener("click", () => {
+  pttMode = !pttMode;
+  try { localStorage.setItem("sw-ptt", pttMode ? "1" : "0"); } catch {}
+  pttHeld = false;
+  applyMicGate();
+  renderVoiceMenu();
+  toast(pttMode ? "Bas konuş açık" : "Mikrofon açık · konuştuğun her şey duyulur");
+});
+
+// ---------- Bas konuş ----------
+function applyMicGate() {
+  const on = voiceOn && (!pttMode || pttHeld);
+  if (sendStream) for (const t of sendStream.getAudioTracks()) t.enabled = on;
+  const b = $("pttBtn");
+  b.hidden = !(voiceOn && pttMode);
+  b.classList.toggle("talking", voiceOn && pttMode && pttHeld);
+  $("voiceBtn").classList.toggle("live", voiceOn && on);
+}
+function talk(on) {
+  if (!pttMode || !voiceOn || pttHeld === on) return;
+  pttHeld = on;
+  applyMicGate();
+}
+(function bindPtt() {
+  const b = $("pttBtn");
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); try { b.setPointerCapture(e.pointerId); } catch {} talk(true); });
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) b.addEventListener(ev, () => talk(false));
+  b.addEventListener("click", (e) => e.stopPropagation());
+  b.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("keydown", (e) => {
+    if ((e.key === "v" || e.key === "V") && !e.repeat && !e.target.closest("input, textarea")) talk(true);
+  });
+  document.addEventListener("keyup", (e) => { if (e.key === "v" || e.key === "V") talk(false); });
+  window.addEventListener("blur", () => talk(false));
+})();
 document.addEventListener("click", (e) => {
   if (!$("voiceMenu").hidden && !e.target.closest("#voiceMenu")) closeVoiceMenu();
 });
@@ -52,6 +91,10 @@ function toggleVoiceMenu() {
 }
 function closeVoiceMenu() { $("voiceMenu").hidden = true; }
 function renderVoiceMenu() {
+  $("vmPtt").setAttribute("aria-checked", pttMode ? "true" : "false");
+  $("vmPttSub").textContent = pttMode
+    ? "Açık · konuşurken butonu basılı tut (bilgisayarda V)"
+    : "Kapalı · mikrofon hep açık";
   $("vmNs").setAttribute("aria-checked", strongNs ? "true" : "false");
   $("vmNsSub").textContent = strongNs
     ? "Açık · fan, klavye, sokak sesini siler"
@@ -74,10 +117,13 @@ async function joinVoice() {
   }
   await loadIceServers();
   voiceOn = true;
+  pttHeld = false;
+  applyMicGate();
   send({ type: "voice", on: true });
   setVoiceBtn("on");
   toast(sameNetworkPeer() ? "Aynı ağdasınız: yankı olmaması için iki tarafta da kulaklık takın"
-                          : "Sesli sohbettesin · en iyi ses için kulaklık tak");
+    : pttMode ? "Sesli sohbete bağlandın · konuşmak için “Bas konuş”u basılı tut"
+    : "Sesli sohbettesin · en iyi ses için kulaklık tak");
   syncVoicePeers();
 }
 
@@ -141,6 +187,7 @@ async function setStrongNs(on) {
     toast("Mikrofon değiştirilemedi");
     return;
   }
+  applyMicGate();
   const track = sendStream.getAudioTracks()[0];
   for (const vp of vpeers.values()) {
     for (const s of vp.pc.getSenders()) {
@@ -205,6 +252,8 @@ function leaveVoice() {
   send({ type: "voice", on: false });
   for (const id of [...vpeers.keys()]) closeVoicePeer(id, true);
   closeMic();
+  pttHeld = false;
+  applyMicGate();
   setVoiceBtn("off");
   unduck();
 }

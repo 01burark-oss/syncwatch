@@ -3,6 +3,8 @@
 //  /ws?room=..&name=..        -> odanın Durable Object'ine WebSocket
 //  /api/upload/*              -> R2'ye parça parça (multipart) yükleme
 //  /api/files/<key>           -> R2'den indirme (Range destekli, kaldığı yerden devam)
+//  /api/subsync?room=..       -> altyazı eşitleme: kısa ses parçasını Workers AI
+//                                (Whisper) ile çözümler, konuşma zamanlarını döndürür
 //  diğer her şey              -> web/ klasöründeki arayüz dosyaları
 import { DurableObject } from "cloudflare:workers";
 
@@ -12,12 +14,18 @@ export interface Env {
   // Cloudflare Realtime TURN (isteğe bağlı). Panelden "secret" olarak eklenir.
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
+  // Workers AI (altyazı eşitleme). Ücretsiz günlük kota içinde kullanılır.
+  AI?: Ai;
 }
 
 const MAX_NAME = 32;
 const MAX_ROOM = 64;
 const MAX_CHAT = 1000;
 const MAX_MSG = 64 * 1024;
+const MAX_SUB = 900 * 1024;          // altyazı (JSON) en fazla ~900 KB
+const MAX_SYNC_AUDIO = 4 * 1024 * 1024; // eşitleme için ses parçası
+const SYNC_PER_DAY = 30;             // oda başına günlük yapay zekâ eşitleme hakkı
+const REACTIONS = ["❤️", "😂", "😮", "😢", "😡", "👍", "🔥", "🍿"];
 const MAX_FILE = 5 * 1024 ** 3; // 5 GB
 const PART_SIZE = 10 * 1024 * 1024; // 10 MB; son parça hariç hepsi bu boyutta
 
@@ -48,6 +56,15 @@ export default {
     if (url.pathname === "/healthz") return new Response("ok");
 
     if (url.pathname === "/api/ice") return iceServers(env);
+
+    if (url.pathname === "/api/subsync" && req.method === "POST") {
+      try {
+        return await subSync(req, url, env);
+      } catch (err) {
+        console.error("subsync", err);
+        return json({ error: "Eşitleme şu an yapılamadı" }, 500);
+      }
+    }
 
     if (url.pathname.startsWith("/api/")) {
       if (!env.FILES) return json({ error: "Depolama ayarlı değil" }, 503);
@@ -88,6 +105,51 @@ async function iceServers(env: Env): Promise<Response> {
     }
   }
   return json({ iceServers: STUN, turn: false });
+}
+
+// ---------- Altyazı eşitleme (Workers AI) ----------
+// Tarayıcı videodan ~45 sn'lik ses parçası (16 kHz mono WAV) gönderir; Whisper
+// konuşmanın zamanlarını çıkarır. Hizalamayı tarayıcı yapar. Video sunucuya
+// gelmez, ses parçası saklanmaz.
+type Span = { start: number; end: number };
+
+async function subSync(req: Request, url: URL, env: Env): Promise<Response> {
+  if (!env.AI) return json({ error: "Yapay zekâ ayarlı değil" }, 503);
+  const room = cleanText(url.searchParams.get("room"), MAX_ROOM);
+  if (!room) return json({ error: "Oda gerekli" }, 400);
+  const len = Number(req.headers.get("content-length") || 0);
+  if (len > MAX_SYNC_AUDIO) return json({ error: "Ses parçası çok büyük" }, 413);
+  const buf = await req.arrayBuffer();
+  if (!buf.byteLength || buf.byteLength > MAX_SYNC_AUDIO) return json({ error: "Ses parçası geçersiz" }, 400);
+
+  const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+  if (!(await stub.takeSyncToken())) return json({ error: "Bugünlük otomatik eşitleme hakkı doldu", limit: true }, 429);
+
+  const bytes = new Uint8Array(buf);
+  let words: Span[] = [];
+  let segments: Span[] = [];
+  try {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const out: any = await env.AI.run("@cf/openai/whisper-large-v3-turbo" as any, { audio: btoa(bin), vad_filter: true } as any);
+    for (const seg of out?.segments || []) {
+      segments.push({ start: Number(seg.start), end: Number(seg.end) });
+      for (const w of seg.words || []) words.push({ start: Number(w.start), end: Number(w.end) });
+    }
+  } catch (err) {
+    console.error("whisper-turbo", err);
+    try {
+      const out: any = await env.AI.run("@cf/openai/whisper" as any, { audio: [...bytes] } as any);
+      for (const w of out?.words || []) words.push({ start: Number(w.start), end: Number(w.end) });
+    } catch (err2) {
+      console.error("whisper", err2);
+      const msg = String(err2);
+      const quota = /quota|limit|exceed|429|neuron/i.test(msg);
+      return json({ error: quota ? "Yapay zekâ günlük kotası doldu" : "Yapay zekâ şu an yanıt vermiyor", limit: quota }, quota ? 429 : 502);
+    }
+  }
+  const ok = (x: Span) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end >= x.start;
+  return json({ words: words.filter(ok), segments: segments.filter(ok) });
 }
 
 // ---------- R2 ----------
@@ -191,10 +253,12 @@ type Shared = { key: string; name: string; size: number; by: string };
 // odaya özel kısa özeti. IP'nin kendisi saklanmaz ve paylaşılmaz.
 type Attachment = { id: string; name: string; file: FileInfo | null; voice?: boolean; net?: string };
 type PlayState = { playing: boolean; position: number; serverTime: number; touched: boolean };
+type SubState = { name: string; data: string; by: string; offset: number };
 
 export class Room extends DurableObject<Env> {
   private play: PlayState = { playing: false, position: 0, serverTime: Date.now(), touched: false };
   private shared: Shared | null = null;
+  private sub: SubState | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -202,6 +266,7 @@ export class Room extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => {
       this.play = (await ctx.storage.get<PlayState>("play")) ?? this.play;
       this.shared = (await ctx.storage.get<Shared>("shared")) ?? null;
+      this.sub = (await ctx.storage.get<SubState>("sub")) ?? null;
     });
   }
 
@@ -214,7 +279,8 @@ export class Room extends DurableObject<Env> {
     const me: Attachment = { id: randomId(), name, file: null, net: await netTag(req, this.ctx.id.toString()) };
     server.serializeAttachment(me);
 
-    this.sendTo(server, { type: "welcome", id: me.id, storage: !!this.env.FILES, shared: this.shared });
+    this.sendTo(server, { type: "welcome", id: me.id, storage: !!this.env.FILES, shared: this.shared, ai: !!this.env.AI });
+    if (this.sub) this.sendTo(server, { type: "subtitle", ...this.sub, quiet: true });
     this.sendTo(server, this.stateMsg(""));
     this.broadcast({ type: "system", text: `${name} odaya katıldı`, time: Date.now() });
     this.broadcast(this.presence());
@@ -231,8 +297,20 @@ export class Room extends DurableObject<Env> {
     return old;
   }
 
+  // Günlük yapay zekâ eşitleme hakkından bir tane kullan.
+  async takeSyncToken(): Promise<boolean> {
+    const day = new Date().toISOString().slice(0, 10);
+    const q = (await this.ctx.storage.get<{ day: string; n: number }>("syncQuota")) ?? { day, n: 0 };
+    if (q.day !== day) { q.day = day; q.n = 0; }
+    if (q.n >= SYNC_PER_DAY) return false;
+    q.n++;
+    await this.ctx.storage.put("syncQuota", q);
+    return true;
+  }
+
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
-    if (typeof raw !== "string" || raw.length > MAX_MSG) return;
+    if (typeof raw !== "string" || raw.length > MAX_SUB + 4096) return;
+    if (raw.length > MAX_MSG && !raw.startsWith('{"type":"subtitle"')) return;
     let m: any;
     try { m = JSON.parse(raw); } catch { return; }
     const me = ws.deserializeAttachment() as Attachment;
@@ -257,6 +335,59 @@ export class Room extends DurableObject<Env> {
         this.broadcast({ ...this.stateMsg(me.name), text: m.type });
         break;
       }
+
+      case "countdown": {
+        // Herkes 3-2-1 sayar; oynatma 3 sn sonra aynı anda başlar.
+        const pos = Number(m.position);
+        if (!(pos >= 0 && pos <= 24 * 3600)) return;
+        this.play = { playing: true, position: pos, serverTime: now + 3000, touched: true };
+        await this.ctx.storage.put("play", this.play);
+        this.broadcast({ ...this.stateMsg(me.name), text: "countdown" });
+        break;
+      }
+
+      case "resync":
+        // Geride kalan herkes odanın konumuna atlasın.
+        this.broadcast({ type: "resync", by: me.name });
+        break;
+
+      case "pos": {
+        // Herkesin gerçek konumu: kayma uyarısı için diğerlerine iletilir.
+        const t = Number(m.t);
+        if (!(t >= 0 && t <= 24 * 3600)) return;
+        this.broadcast({ type: "pos", id: me.id, name: me.name, t, at: now, buffering: !!m.buffering },
+          this.openSockets().filter((w) => w !== ws));
+        break;
+      }
+
+      case "react": {
+        if (!REACTIONS.includes(m.emoji)) return;
+        this.broadcast({ type: "react", emoji: m.emoji, from: me.name, fromId: me.id });
+        break;
+      }
+
+      case "subtitle": {
+        if (typeof m.data !== "string" || !m.data || m.data.length > MAX_SUB) return;
+        this.sub = { name: cleanText(m.name, 200) || "Altyazı", data: m.data, by: me.name, offset: 0 };
+        await this.ctx.storage.put("sub", this.sub);
+        this.broadcast({ type: "subtitle", ...this.sub });
+        break;
+      }
+
+      case "subOffset": {
+        const off = Number(m.offset);
+        if (!this.sub || !(Math.abs(off) <= 3600)) return;
+        this.sub.offset = Math.round(off * 100) / 100;
+        await this.ctx.storage.put("sub", this.sub);
+        this.broadcast({ type: "subOffset", offset: this.sub.offset, by: me.name, auto: !!m.auto });
+        break;
+      }
+
+      case "subClear":
+        this.sub = null;
+        await this.ctx.storage.delete("sub");
+        this.broadcast({ type: "subClear", by: me.name });
+        break;
 
       case "chat": {
         const text = cleanText(m.text, MAX_CHAT);

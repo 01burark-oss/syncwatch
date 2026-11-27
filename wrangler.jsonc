@@ -15,6 +15,9 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
 
   // Odaya yüklenen video dosyaları.
+  // Altyazı eşitleme için Workers AI (Whisper). Ücretsiz günlük kota yeterli.
+  "ai": { "binding": "AI" },
+
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "syncwatch-files" }],
 
   // Panelden eklenen değişkenler (ör. TURN anahtarları) yeni yayında silinmesin.

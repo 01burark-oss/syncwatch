@@ -95,6 +95,8 @@ function enterRoom(code) {
   document.title = roomId + " · SyncWatch";
   renderPeople();
   connect();
+  // Sesli sohbet odaya girince açılır (varsayılan bas-konuş).
+  if (typeof joinVoice === "function" && safeGet("sw-voice-auto") !== "0") joinVoice();
 }
 
 // Odadan çık: sesli sohbeti kapat, bağlantıyı kes, giriş ekranına dön.
@@ -210,6 +212,9 @@ function onMessage(m) {
     case "welcome":
       myId = m.id;
       storageAvailable = !!m.storage;
+      if (typeof aiAvailable !== "undefined") aiAvailable = !!m.ai;
+      // Sesli sohbet bağlantıdan önce açıldıysa (ya da yeniden bağlandıysak) bildir.
+      if (typeof voiceOn !== "undefined" && voiceOn) send({ type: "voice", on: true });
       shared = m.shared || null;
       if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
       break;
@@ -221,6 +226,17 @@ function onMessage(m) {
       if (m.data && typeof m.data.kind === "string" && m.data.kind.startsWith("v-")) {
         if (typeof handleVoiceSignal === "function") handleVoiceSignal(m);
       } else if (typeof handleSignal === "function") handleSignal(m);
+      break;
+    case "subtitle":
+    case "subOffset":
+    case "subClear":
+      if (typeof onSubMessage === "function") onSubMessage(m);
+      break;
+    case "react":
+      if (typeof onReact === "function") onReact(m);
+      break;
+    case "pos":
+      if (typeof onPos === "function") onPos(m);
       break;
     case "presence":
       members = m.members || [];
@@ -266,6 +282,14 @@ function applyState(force) {
   if (!fileLoaded || !state || !unlocked) return;
   if (!force && Date.now() < localActionUntil) return;
   if (video.seeking) return;
+
+  // Geri sayım sürüyor: başlangıç anına kadar durmuş bekle.
+  if (state.playing && serverNow() < state.serverTime) {
+    if (!video.paused) doPause();
+    if (Math.abs(video.currentTime - state.position) > 0.05) doSeek(state.position);
+    setTimeout(() => applyState(true), Math.max(0, state.serverTime - serverNow()) + 5);
+    return;
+  }
 
   const target = expectedPosition();
   const dur = video.duration || Infinity;
@@ -400,34 +424,6 @@ wrap.addEventListener("drop", (e) => {
   if (!f) return;
   if (/\.(srt|vtt)$/i.test(f.name)) loadSubtitle(f); else loadFile(f);
 });
-
-$("subInput").addEventListener("change", (e) => { loadSubtitle(e.target.files[0]); e.target.value = ""; });
-
-async function loadSubtitle(f) {
-  if (!f) return;
-  let text = await f.text();
-  if (!/\.vtt$/i.test(f.name)) text = srtToVtt(text);
-  for (const t of video.querySelectorAll("track")) {
-    URL.revokeObjectURL(t.src);
-    t.remove();
-  }
-  const track = document.createElement("track");
-  track.kind = "subtitles";
-  track.label = "Altyazı";
-  track.srclang = "tr";
-  track.src = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
-  track.default = true;
-  video.appendChild(track);
-  track.track.mode = "showing";
-  toast("Altyazı eklendi");
-}
-
-function srtToVtt(srt) {
-  return "WEBVTT\n\n" + srt
-    .replace(/^\uFEFF/, "")
-    .replace(/\r+/g, "")
-    .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
-}
 
 // ---------- Odadakiler ----------
 // Odadakiler: üst çubukta baş harfli yuvarlak avatarlar.
