@@ -29,11 +29,16 @@
           <span>Adın</span>
           <input id="nameInput" maxlength="32" required autocomplete="nickname" placeholder="Adını yaz">
         </label>
-        <label id="roomField" class="field">
-          <span>Oda adı</span>
-          <input id="roomInput" maxlength="64" required>
-        </label>
-        <button class="primary big" type="submit">Odaya gir</button>
+        <div id="createBlock" class="createBlock">
+          <button id="createBtn" class="primary big" type="button">Yeni oda oluştur</button>
+          <div class="joinOr"><span>ya da koda katıl</span></div>
+          <div class="codeRow">
+            <input id="codeInput" maxlength="12" placeholder="Oda kodu" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-label="Oda kodu">
+            <button class="ghost codeJoin" type="submit">Katıl</button>
+          </div>
+        </div>
+        <button id="inviteJoin" class="primary big" type="submit" hidden>Odaya gir</button>
+        <p id="joinErr" class="joinErr" hidden></p>
       </form>
       <p class="hint">Video dosyası internete yüklenmez. İkiniz de kendi cihazınızdaki dosyayı seçersiniz.</p>
     </div>
@@ -68,12 +73,27 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
         <span>Davet et</span>
       </button>
+      <button id="leaveBtn" class="iconBtn leaveBtn" type="button" title="Odadan çık" aria-label="Odadan çık">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h10"/></svg>
+      </button>
     </header>
 
     <div class="stage">
       <section class="playerCol">
         <div id="videoWrap" class="videoWrap empty">
-          <video id="video" controls playsinline preload="auto"></video>
+          <video id="video" controls playsinline preload="auto" controlslist="nofullscreen"></video>
+
+          <div class="fsTools">
+            <button id="chatToggle" class="fsBtn" type="button" aria-label="Sohbet" title="Sohbet" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/></svg>
+              <span id="chatBadge" class="badge" hidden></span>
+            </button>
+            <button id="fsBtn" class="fsBtn" type="button" aria-label="Tam ekran" title="Tam ekran">
+              <svg class="fsIn" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+              <svg class="fsOut" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+            </button>
+          </div>
+          <div id="chatDock" class="chatDock"></div>
 
           <div id="placeholder" class="dropzone">
             <label class="pick">

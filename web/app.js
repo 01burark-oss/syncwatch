@@ -36,37 +36,74 @@ let members = [];
 const serverNow = () => Date.now() + clockOffset;
 
 // ---------- Giriş ----------
-const ROOM_WORDS = ["film-gecesi", "patlamis-misir", "battaniye", "gece-seansi", "koltuk", "dizi-maratonu"];
+// Odalara kısa bir kodla girilir (ör. K7P4QX). Karışmasın diye 0/O, 1/I/L yok.
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+function newRoomCode() {
+  const a = new Uint32Array(6);
+  crypto.getRandomValues(a);
+  return [...a].map((n) => CODE_CHARS[n % CODE_CHARS.length]).join("");
+}
+// Yazılan kodu düzelt: boşluk/tire at, büyük harfe çevir. Eski davet
+// linklerindeki oda adları (ör. film-gecesi-23) olduğu gibi kalır.
+function normalizeCode(v) {
+  const raw = String(v || "").trim();
+  const c = raw.replace(/[\s-]+/g, "").toLocaleUpperCase("en");
+  return /^[A-Z0-9]{4,10}$/.test(c) ? c : raw;
+}
 
 (function initJoin() {
-  const invited = new URLSearchParams(location.search).get("oda");
+  const invited = normalizeCode(new URLSearchParams(location.search).get("oda"));
   $("nameInput").value = safeGet("sw-name") || "";
   if (invited) {
-    $("roomInput").value = invited;
-    $("roomField").hidden = true;
-    $("joinLead").textContent = `“${invited}” odasına davet edildin.`;
+    $("createBlock").hidden = true;
+    $("inviteJoin").hidden = false;
+    $("joinLead").textContent = `${invited} kodlu odaya davet edildin.`;
   } else {
-    $("roomInput").value = safeGet("sw-room") ||
-      ROOM_WORDS[Math.floor(Math.random() * ROOM_WORDS.length)] + "-" + Math.floor(10 + Math.random() * 90);
+    const last = safeGet("sw-room");
+    if (last && /^[A-Z0-9]{4,10}$/.test(last)) $("codeInput").placeholder = `Oda kodu (son: ${last})`;
   }
   if ($("nameInput").value) $("nameInput").select();
 
+  const err = (t) => { $("joinErr").textContent = t; $("joinErr").hidden = !t; };
+  $("codeInput").addEventListener("input", () => err(""));
+
+  $("createBtn").addEventListener("click", () => {
+    if (!$("joinForm").reportValidity()) return;
+    enterRoom(newRoomCode());
+  });
   $("joinForm").addEventListener("submit", (e) => {
     e.preventDefault();
-    myName = $("nameInput").value.trim();
-    roomId = $("roomInput").value.trim();
-    if (!myName || !roomId) return;
-    safeSet("sw-name", myName);
-    safeSet("sw-room", roomId);
-    history.replaceState(null, "", "?oda=" + encodeURIComponent(roomId));
-    $("join").hidden = true;
-    $("app").hidden = false;
-    $("roomLabel").textContent = roomId;
-    document.title = roomId + " · SyncWatch";
-    renderPeople();
-    connect();
+    if (invited) { enterRoom(invited); return; }
+    let code = normalizeCode($("codeInput").value);
+    if (!code && $("codeInput").placeholder.includes("son:")) code = safeGet("sw-room");
+    if (!code) { err("Katılmak için oda kodunu yaz ya da yeni oda oluştur."); $("codeInput").focus(); return; }
+    enterRoom(code);
   });
 })();
+
+function enterRoom(code) {
+  myName = $("nameInput").value.trim();
+  roomId = code;
+  if (!myName || !roomId) return;
+  safeSet("sw-name", myName);
+  safeSet("sw-room", roomId);
+  history.replaceState(null, "", "?oda=" + encodeURIComponent(roomId));
+  $("join").hidden = true;
+  $("app").hidden = false;
+  $("roomLabel").textContent = roomId;
+  $("roomLabel").classList.toggle("code", /^[A-Z0-9]{4,10}$/.test(roomId));
+  document.title = roomId + " · SyncWatch";
+  renderPeople();
+  connect();
+}
+
+// Odadan çık: sesli sohbeti kapat, bağlantıyı kes, giriş ekranına dön.
+// Sayfa baştan yüklenir ki video, aktarım ve bağlantılar temizce kapansın.
+$("leaveBtn").addEventListener("click", () => {
+  if (typeof voiceOn !== "undefined" && voiceOn) leaveVoice();
+  if (ws) { ws.onclose = null; try { ws.close(1000, "leave"); } catch {} }
+  location.replace(location.pathname);
+});
 
 function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -75,11 +112,11 @@ $("copyLink").addEventListener("click", async () => {
   const link = location.origin + location.pathname + "?oda=" + encodeURIComponent(roomId);
   try {
     if (navigator.share && matchMedia("(pointer: coarse)").matches) {
-      await navigator.share({ title: "SyncWatch", text: "Birlikte izleyelim mi?", url: link });
+      await navigator.share({ title: "SyncWatch", text: `Birlikte izleyelim mi? Oda kodu: ${roomId}`, url: link });
       return;
     }
     await navigator.clipboard.writeText(link);
-    toast("Davet linki kopyalandı");
+    toast(`Davet linki kopyalandı · oda kodu ${roomId}`);
   } catch (err) {
     if (err && err.name === "AbortError") return;
     window.prompt("Bu linki gönder:", link);
@@ -657,6 +694,7 @@ $("chatForm").addEventListener("submit", (e) => {
 
 let lastSender = null;
 function addChat(from, text, mine) {
+  if (!mine && typeof noteIncomingChat === "function") noteIncomingChat(from, text);
   if (from !== lastSender) {
     const who = document.createElement("div");
     who.className = "who" + (mine ? " mine" : "");
@@ -696,3 +734,79 @@ function fmtTime(s) {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
+
+// ---------- Tam ekran ve yan ekran ----------
+// Telefon yan çevrilince (ya da tam ekran butonuyla) video ekranı kaplar;
+// sohbet sağdan açılıp kapanan bir panele taşınır.
+const chatEl = document.querySelector(".chat");
+const chatHome = { parent: chatEl.parentNode, next: chatEl.nextSibling };
+const landscapeMq = matchMedia("(orientation: landscape) and (max-height: 520px)");
+let immersive = false;
+let pseudoFs = false; // Fullscreen API olmayan cihazlar (iPhone) için
+let unread = 0;
+
+function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+
+function updateImmersive() {
+  const wrapEl = $("videoWrap");
+  const hasVideo = !wrapEl.classList.contains("empty");
+  const on = hasVideo && (fsElement() === wrapEl || pseudoFs || landscapeMq.matches);
+  $("chatToggle").hidden = !on;
+  if (on === immersive) return;
+  immersive = on;
+  document.body.classList.toggle("immersive", on);
+  if (on) {
+    $("chatDock").appendChild(chatEl);
+  } else {
+    chatHome.parent.insertBefore(chatEl, chatHome.next);
+    setDock(false);
+    if (screen.orientation && screen.orientation.unlock) { try { screen.orientation.unlock(); } catch {} }
+  }
+}
+
+function setDock(open) {
+  $("videoWrap").classList.toggle("dockOpen", open);
+  if (open) { unread = 0; renderBadge(); const m = $("messages"); m.scrollTop = m.scrollHeight; }
+}
+function renderBadge() {
+  $("chatBadge").hidden = !unread;
+  $("chatBadge").textContent = unread > 9 ? "9+" : String(unread);
+}
+// Panel kapalıyken gelen mesajı say ve kısaca göster.
+function noteIncomingChat(from, text) {
+  if (!immersive || $("videoWrap").classList.contains("dockOpen")) return;
+  unread++;
+  renderBadge();
+  toast(`${from}: ${text.length > 80 ? text.slice(0, 80) + "…" : text}`);
+}
+
+$("chatToggle").addEventListener("click", () => setDock(!$("videoWrap").classList.contains("dockOpen")));
+
+$("fsBtn").addEventListener("click", async () => {
+  const wrapEl = $("videoWrap");
+  if (immersive) {
+    if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    pseudoFs = false;
+    if (landscapeMq.matches) toast("Telefonu dik çevirince normal görünüme döner");
+    updateImmersive();
+    return;
+  }
+  const req = wrapEl.requestFullscreen || wrapEl.webkitRequestFullscreen;
+  if (req) {
+    try {
+      await req.call(wrapEl);
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(() => {});
+    } catch { pseudoFs = true; }
+  } else {
+    pseudoFs = true;
+  }
+  updateImmersive();
+});
+
+document.addEventListener("fullscreenchange", updateImmersive);
+document.addEventListener("webkitfullscreenchange", updateImmersive);
+landscapeMq.addEventListener ? landscapeMq.addEventListener("change", updateImmersive) : landscapeMq.addListener(updateImmersive);
+video.addEventListener("loadedmetadata", updateImmersive);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && pseudoFs) { pseudoFs = false; updateImmersive(); }
+});
