@@ -385,3 +385,12 @@ document.addEventListener("keydown", (e) => {
   else if (k === "f") $("fsBtn").click();
   else if (k === "m") $("cMute").click();
 });
+
+// Kontrol çubuğunun gerçek yüksekliği: altyazı kontrollerin arkasında kalmasın.
+(function measureCtrls() {
+  const bottom = document.querySelector("#ctrls .cBottom");
+  const set = () => pWrap.style.setProperty("--ctrlH", bottom.offsetHeight + "px");
+  if (window.ResizeObserver) new ResizeObserver(set).observe(bottom);
+  window.addEventListener("resize", set);
+  set();
+})();

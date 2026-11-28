@@ -75,6 +75,13 @@ async function handleSignalNow(m) {
     } else if (d.kind === "ice") {
       const p = peers.get(from);
       if (p && d.candidate) await addIce(p, d.candidate);
+    } else if (d.kind === "refile") {
+      // Gönderen dosyayı yeniden seçti: yarım kalan indirmeyi sürdür.
+      const m = members.find((x) => x.id === from);
+      if (m && download && download.peerId === from && download.state === "failed" && d.file &&
+          d.file.name === download.file.name && d.file.size === download.file.size) {
+        startDownload({ ...m, file: { ...(m.file || {}), name: d.file.name, size: d.file.size } }, true);
+      }
     } else if (d.kind === "reject") {
       if (download && download.peerId === from) failDownload(d.reason || "Karşı taraf dosyayı gönderemedi.");
     }
@@ -119,20 +126,72 @@ async function onOffer(peerId, peerName, d) {
   sendSignal(peerId, { kind: "answer", sdp: answer.sdp });
 }
 
+// Chrome, seçildikten sonra diskte dokunulan dosyanın eski kopyasını okumaz
+// (NotReadableError). Elimizde dosya tutamacı varsa taze kopyasını alırız,
+// kullanıcının dosyayı yeniden seçmesine gerek kalmaz.
+async function freshFile(file) {
+  const h = file && file._handle;
+  if (!h || !h.getFile) return null;
+  try {
+    const f = await h.getFile();
+    if (f.size !== file.size || f.name !== file.name) return null;
+    f._handle = h;
+    const i = recentFiles.indexOf(file);
+    if (i >= 0) recentFiles[i] = f;
+    if (myFileObj === file) myFileObj = f;
+    return f;
+  } catch { return null; }
+}
+
+async function readBlock(ref, a, b) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await ref.file.slice(a, b).arrayBuffer(); }
+    catch (err) {
+      if (attempt >= 2) throw err;
+      const f = await freshFile(ref.file);
+      if (f) ref.file = f;
+      else await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}
+
+// Dosya okunamadığı için indiremeyen kişiler; dosya yeniden seçilince
+// onlara haber verilir ve indirme kendiliğinden kaldığı yerden sürer.
+const needRefile = new Set();
+let refileWarn = null;
+
+function askRefile(peerName) {
+  refileWarn = {
+    text: `Dosyan okunamadı, ${peerName} indiremiyor. Aynı dosyayı yeniden seç, indirme kendiliğinden devam eder.`,
+    action: { label: "Dosyayı tekrar seç", onClick: () => $("fileInput2").click() },
+  };
+  showNotice(refileWarn.text, refileWarn.action);
+  toast("Dosyan okunamadı, yeniden seçmen gerekiyor");
+}
+
+function onMyFileChanged() {
+  if (!needRefile.size) return;
+  refileWarn = null;
+  for (const id of needRefile) sendSignal(id, { kind: "refile", file: { name: myFileObj.name, size: myFileObj.size } });
+  needRefile.clear();
+  checkFiles();
+}
+
 async function streamFile(peerId, peerName, ch, file, offset) {
   const up = { name: peerName, sent: offset, size: file.size };
   uploads.set(peerId, up);
   renderUploads();
+  const ref = { file };
   let pos = offset;
   const waitDrain = () => new Promise((res) => {
     ch.onbufferedamountlow = () => { ch.onbufferedamountlow = null; res(); };
   });
   try {
-    while (pos < file.size) {
+    while (pos < ref.file.size) {
       if (ch.readyState !== "open") return;
       // Dosyayı 4 MB'lık bloklar halinde oku, 64 KB'lık parçalarla gönder.
-      const blockEnd = Math.min(pos + HIGH_WATER, file.size);
-      const buf = await file.slice(pos, blockEnd).arrayBuffer();
+      const blockEnd = Math.min(pos + HIGH_WATER, ref.file.size);
+      const buf = await readBlock(ref, pos, blockEnd);
       for (let i = 0; i < buf.byteLength; i += CHUNK) {
         if (ch.readyState !== "open") return;
         if (ch.bufferedAmount > HIGH_WATER) await waitDrain();
@@ -145,12 +204,12 @@ async function streamFile(peerId, peerName, ch, file, offset) {
     ch.send(JSON.stringify({ done: true }));
   } catch (err) {
     console.warn("[SyncWatch] gönderim", err);
-    // Dosya okunamadıysa (taşındı, değişti, bulut klasöründe vb.) karşıya söyle.
-    const reason = err && err.name === "NotReadableError"
-      ? `${myName} tarafında dosya okunamadı. Dosyayı yeniden seçmesi gerekiyor.`
+    const unreadable = err && (err.name === "NotReadableError" || err.name === "NotFoundError");
+    const reason = unreadable
+      ? `${myName} tarafında dosya okunamadı. Ondan aynı dosyayı yeniden seçmesini iste, seçince indirme kendiliğinden devam eder.`
       : `${myName} tarafında gönderim durdu.`;
-    try { ch.send(JSON.stringify({ error: reason })); } catch {}
-    showNotice("Dosya okunamadı, karşı taraf indiremiyor. Dosyayı “Değiştir” ile yeniden seç.");
+    try { ch.send(JSON.stringify({ error: reason, refile: unreadable })); } catch {}
+    if (unreadable) { needRefile.add(peerId); askRefile(peerName); }
     uploads.delete(peerId);
     renderUploads();
   }
@@ -232,7 +291,7 @@ async function startDownload(m, resume) {
     if (typeof e.data === "string") {
       let msg; try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.done) finishDownload(dl);
-      else if (msg.error) failDownload(msg.error);
+      else if (msg.error) { dl.waitRefile = !!msg.refile; failDownload(msg.error); }
       return;
     }
     dl.sink.write(e.data);
@@ -335,7 +394,7 @@ function diskSink(handle) {
     },
     flush() { return chain; },
     async pause() { await chain.catch(() => {}); if (writable) { await writable.close(); writable = null; } },
-    async finish() { await chain; await writable.close(); writable = null; return handle.getFile(); },
+    async finish() { await chain; await writable.close(); writable = null; const f = await handle.getFile(); f._handle = handle; return f; },
     async abort() { if (writable) { await writable.abort(); writable = null; } },
   };
 }
@@ -390,7 +449,9 @@ function renderDownload() {
     line = `%${Math.floor(pct)} · ${fmtSize(dl.received)} / ${fmtSize(dl.file.size)}`;
     if (dl.speed > 0) line += ` · ${fmtSize(dl.speed)}/sn · ${fmtDuration(left)} kaldı`;
   } else if (dl.state === "saving") line = "Kaydediliyor…";
-  else if (dl.state === "failed") line = `${dl.error} %${Math.floor(pct)} indi, kaldığı yerden devam edebilirsin.`;
+  else if (dl.state === "failed") line = dl.waitRefile
+    ? `${dl.error} (%${Math.floor(pct)} indi)`
+    : `${dl.error} %${Math.floor(pct)} indi, kaldığı yerden devam edebilirsin.`;
   $("dlLine").textContent = line;
 }
 

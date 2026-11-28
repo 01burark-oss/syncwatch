@@ -395,6 +395,7 @@ function loadFile(f) {
     }
     if (typeof renderOffer === "function") { renderOffer(); renderUploadUi(); }
     send({ type: "file", file: myFile });
+    if (typeof onMyFileChanged === "function") onMyFileChanged();
     $("readyOverlay").hidden = false;
     checkFiles();
   };
@@ -411,6 +412,20 @@ function loadFile(f) {
 
 for (const id of ["fileInput", "fileInput2"]) {
   $(id).addEventListener("change", (e) => { loadFile(e.target.files[0]); e.target.value = ""; });
+  // Masaüstü Chrome/Edge: dosyayı tutamaçla seç. Dosya diskte değişip eski
+  // kopyası okunamazsa (ör. karşı taraf indirirken) yeniden seçmeye gerek kalmaz.
+  if (window.showOpenFilePicker && !matchMedia("(pointer: coarse)").matches) {
+    $(id).addEventListener("click", (e) => {
+      e.preventDefault();
+      window.showOpenFilePicker({
+        types: [{ description: "Video", accept: { "video/*": [".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi"] } }],
+      }).then(async ([h]) => {
+        const f = await h.getFile();
+        f._handle = h;
+        loadFile(f);
+      }).catch((err) => { if (!err || err.name !== "AbortError") console.warn(err); });
+    });
+  }
 }
 
 // Sürükle-bırak
@@ -422,6 +437,9 @@ wrap.addEventListener("drop", (e) => {
   wrap.classList.remove("dragging");
   const f = e.dataTransfer.files[0];
   if (!f) return;
+  // Chrome: dosya tutamacını da al; dosya sonradan okunamazsa tazelenir.
+  const item = e.dataTransfer.items && e.dataTransfer.items[0];
+  if (item && item.getAsFileSystemHandle) item.getAsFileSystemHandle().then((h) => { if (h && h.kind === "file") f._handle = h; }).catch(() => {});
   if (/\.(srt|vtt)$/i.test(f.name)) loadSubtitle(f); else loadFile(f);
 });
 
@@ -513,6 +531,7 @@ function sameFile(a, b) {
 // bizde de açılmışsa tek dokunuşla ona geçilebilsin.
 function checkFiles() {
   renderPeopleMenu();
+  if (typeof refileWarn !== "undefined" && refileWarn) { showNotice(refileWarn.text, refileWarn.action); return; }
   if (!myFile) { showNotice(""); return; }
   const others = members.filter((m) => m.id !== myId && m.file);
   const odd = others.find((m) => !sameFile(m.file, myFile));
