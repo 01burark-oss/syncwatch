@@ -333,7 +333,7 @@ a.ghost { text-decoration: none; }
   .upProgress { margin: -8px 0 0; border-radius: 0; }
 
   .fileBar { padding: 0 12px 0 16px; gap: 10px; min-height: 36px; }
-  .fileBar .fileName { display: none; }
+  .fileBar .fileName { flex: 0 1 auto; max-width: none; }
   .syncState, .uploadInfo { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .notice, #fileWarn { margin: 0 12px; }
 
@@ -683,3 +683,6 @@ body.immersive .subMenu { max-height: calc(100% - 76px); }
 body.immersive .cBottom { padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 body.immersive .pttBtn { left: max(14px, env(safe-area-inset-left)); top: max(14px, env(safe-area-inset-top)); }
 body.immersive .subLayer { left: max(6%, env(safe-area-inset-left)); right: max(6%, env(safe-area-inset-right)); }
+
+/* Kenardaki yuvarlak düğmeler siyah boşlukta da belli olsun. */
+.cRound { box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }

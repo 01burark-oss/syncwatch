@@ -64,6 +64,14 @@ function normalizeCode(v) {
   }
   if ($("nameInput").value) $("nameInput").select();
 
+  // Sayfa yenilendiyse (aynı sekme, aynı oda) adı yeniden sormadan odaya dön.
+  let inRoom = null;
+  try { inRoom = sessionStorage.getItem("sw-in"); } catch {}
+  if (invited && inRoom === invited && $("nameInput").value.trim()) {
+    $("join").hidden = true;
+    document.addEventListener("DOMContentLoaded", () => enterRoom(invited));
+  }
+
   const err = (t) => { $("joinErr").textContent = t; $("joinErr").hidden = !t; };
   $("codeInput").addEventListener("input", () => err(""));
 
@@ -87,6 +95,7 @@ function enterRoom(code) {
   if (!myName || !roomId) return;
   safeSet("sw-name", myName);
   safeSet("sw-room", roomId);
+  try { sessionStorage.setItem("sw-in", roomId); } catch {}
   history.replaceState(null, "", "?oda=" + encodeURIComponent(roomId));
   $("join").hidden = true;
   $("app").hidden = false;
@@ -102,6 +111,7 @@ function enterRoom(code) {
 // Odadan çık: sesli sohbeti kapat, bağlantıyı kes, giriş ekranına dön.
 // Sayfa baştan yüklenir ki video, aktarım ve bağlantılar temizce kapansın.
 $("leaveBtn").addEventListener("click", () => {
+  try { sessionStorage.removeItem("sw-in"); } catch {}
   if (typeof voiceOn !== "undefined" && voiceOn) leaveVoice();
   if (ws) { ws.onclose = null; try { ws.close(1000, "leave"); } catch {} }
   location.replace(location.pathname);
