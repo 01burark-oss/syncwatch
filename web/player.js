@@ -394,3 +394,10 @@ document.addEventListener("keydown", (e) => {
   window.addEventListener("resize", set);
   set();
 })();
+
+// Çerçeveyi videonun oranına yaklaştır (4:3 ile 2.4:1 arası); dikey videoda
+// kontrol çubuğu siyah boşlukta kalmasın.
+video.addEventListener("loadedmetadata", () => {
+  const r = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+  pWrap.style.setProperty("--ar", String(Math.min(2.4, Math.max(4 / 3, r))));
+});

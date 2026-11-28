@@ -411,7 +411,7 @@ function loadFile(f) {
 }
 
 for (const id of ["fileInput", "fileInput2"]) {
-  $(id).addEventListener("change", (e) => { loadFile(e.target.files[0]); e.target.value = ""; });
+  $(id).addEventListener("change", (e) => { const f = e.target.files[0]; if (f) f._src = "input"; loadFile(f); e.target.value = ""; });
   // Masaüstü Chrome/Edge: dosyayı tutamaçla seç. Dosya diskte değişip eski
   // kopyası okunamazsa (ör. karşı taraf indirirken) yeniden seçmeye gerek kalmaz.
   if (window.showOpenFilePicker && !matchMedia("(pointer: coarse)").matches) {
@@ -422,6 +422,7 @@ for (const id of ["fileInput", "fileInput2"]) {
       }).then(async ([h]) => {
         const f = await h.getFile();
         f._handle = h;
+        f._src = "picker";
         loadFile(f);
       }).catch((err) => { if (!err || err.name !== "AbortError") console.warn(err); });
     });
@@ -437,6 +438,7 @@ wrap.addEventListener("drop", (e) => {
   wrap.classList.remove("dragging");
   const f = e.dataTransfer.files[0];
   if (!f) return;
+  f._src = "drop";
   // Chrome: dosya tutamacını da al; dosya sonradan okunamazsa tazelenir.
   const item = e.dataTransfer.items && e.dataTransfer.items[0];
   if (item && item.getAsFileSystemHandle) item.getAsFileSystemHandle().then((h) => { if (h && h.kind === "file") f._handle = h; }).catch(() => {});

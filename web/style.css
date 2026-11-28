@@ -115,10 +115,13 @@ input:not([type=file]):focus { outline: none; border-color: var(--accent); }
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: var(--ar, 16 / 9);
   max-height: calc(100dvh - 140px);
 }
-.videoWrap video { width: 100%; height: 100%; display: block; background: #000; }
+.videoWrap video { width: 100%; height: 100%; display: block; background: transparent; object-fit: contain; }
+/* Videonun oranı çerçeveye uymazsa (ör. dikey video) kenarlar sayfadan ayrılsın,
+   kontrol çubuğu boşlukta asılı durmasın. */
+body:not(.immersive) .videoWrap:not(.empty) { background: #141414; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
 .videoWrap.empty video { visibility: hidden; }
 
 .dropzone {
@@ -159,7 +162,9 @@ input:not([type=file]):focus { outline: none; border-color: var(--accent); }
 }
 @keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
 
-.fileBar { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.fileBar { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; padding-top: 4px; }
+.fileBar > button, .fileBar > a, .fileBar > label, .fileBar .syncState { flex: none; white-space: nowrap; }
+.fileBar .fileName { flex: 0 1 auto; min-width: 0; }
 .fileBar label { flex: none; }
 .fileName { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
 .syncState { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }

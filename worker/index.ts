@@ -57,6 +57,14 @@ export default {
 
     if (url.pathname === "/api/ice") return iceServers(env);
 
+    // Hata ayıklama: odada son aktarım hatalarının kısa kaydı (kişisel veri yok).
+    if (url.pathname === "/api/diag") {
+      const room = cleanText(url.searchParams.get("room"), MAX_ROOM);
+      if (!room) return json({ error: "room gerekli" }, 400);
+      const stub = env.ROOMS.get(env.ROOMS.idFromName(room)) as any;
+      return json({ diag: await stub.getDiag() });
+    }
+
     if (url.pathname === "/api/subsync" && req.method === "POST") {
       try {
         return await subSync(req, url, env);
@@ -297,6 +305,10 @@ export class Room extends DurableObject<Env> {
     return old;
   }
 
+  async getDiag(): Promise<unknown[]> {
+    return (await this.ctx.storage.get<unknown[]>("diag")) ?? [];
+  }
+
   // Günlük yapay zekâ eşitleme hakkından bir tane kullan.
   async takeSyncToken(): Promise<boolean> {
     const day = new Date().toISOString().slice(0, 10);
@@ -388,6 +400,15 @@ export class Room extends DurableObject<Env> {
         await this.ctx.storage.delete("sub");
         this.broadcast({ type: "subClear", by: me.name });
         break;
+
+      case "diag": {
+        const text = cleanText(m.text, 800);
+        if (!text) return;
+        const list = (await this.ctx.storage.get<unknown[]>("diag")) ?? [];
+        list.push({ t: new Date(now).toISOString(), name: me.name, text });
+        await this.ctx.storage.put("diag", list.slice(-40));
+        break;
+      }
 
       case "chat": {
         const text = cleanText(m.text, MAX_CHAT);

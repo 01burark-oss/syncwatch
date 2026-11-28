@@ -25,6 +25,15 @@ const LOW_WATER = 1 * 1024 * 1024;
 // ---------- Ortak ----------
 const peers = new Map(); // peerId -> { pc, role, ... }
 
+// Aktarım sorunlarını teşhis için odaya kısa not bırak (kullanıcıya gösterilmez).
+function diag(text) {
+  try { send({ type: "diag", text: `${text} | ${navigator.userAgent.slice(0, 160)}` }); } catch {}
+}
+function fileDiag(f) {
+  if (!f) return "dosya yok";
+  return `src=${f._src || "?"} handle=${!!f._handle} size=${f.size} lm=${f.lastModified} type=${f.type || "-"}`;
+}
+
 function sendSignal(to, data) {
   send({ type: "signal", to, data });
 }
@@ -95,6 +104,7 @@ const uploads = new Map(); // peerId -> { name, sent, size }
 
 async function onOffer(peerId, peerName, d) {
   const f = myFileObj;
+  diag(`offer geldi from=${peerName} offset=${d.offset || 0} ${fileDiag(f)}`);
   if (!f || f.name !== d.file.name || f.size !== d.file.size) {
     sendSignal(peerId, { kind: "reject", reason: "Karşı taraf dosyayı değiştirmiş ya da kapatmış." });
     return;
@@ -136,6 +146,7 @@ async function freshFile(file) {
     const f = await h.getFile();
     if (f.size !== file.size || f.name !== file.name) return null;
     f._handle = h;
+    f._src = (file._src || "?") + "+taze";
     const i = recentFiles.indexOf(file);
     if (i >= 0) recentFiles[i] = f;
     if (myFileObj === file) myFileObj = f;
@@ -147,6 +158,7 @@ async function readBlock(ref, a, b) {
   for (let attempt = 0; ; attempt++) {
     try { return await ref.file.slice(a, b).arrayBuffer(); }
     catch (err) {
+      diag(`okuma denemesi ${attempt} ${err && err.name} a=${a} ${fileDiag(ref.file)}`);
       if (attempt >= 2) throw err;
       const f = await freshFile(ref.file);
       if (f) ref.file = f;
@@ -204,6 +216,7 @@ async function streamFile(peerId, peerName, ch, file, offset) {
     ch.send(JSON.stringify({ done: true }));
   } catch (err) {
     console.warn("[SyncWatch] gönderim", err);
+    diag(`gönderim hatası ${err && err.name}: ${err && err.message} pos=${pos} ${fileDiag(ref.file)}`);
     const unreadable = err && (err.name === "NotReadableError" || err.name === "NotFoundError");
     const reason = unreadable
       ? `${myName} tarafında dosya okunamadı. Ondan aynı dosyayı yeniden seçmesini iste, seçince indirme kendiliğinden devam eder.`
@@ -341,6 +354,7 @@ async function finishDownload(dl) {
 function failDownload(reason) {
   const dl = download;
   if (!dl || dl.state === "failed") return;
+  diag(`indirme durdu: ${reason} alınan=${dl.received}/${dl.file.size} durum=${dl.state}`);
   dl.state = "failed";
   dl.error = reason;
   if (dl.ctrl) dl.ctrl.abort();
@@ -394,7 +408,7 @@ function diskSink(handle) {
     },
     flush() { return chain; },
     async pause() { await chain.catch(() => {}); if (writable) { await writable.close(); writable = null; } },
-    async finish() { await chain; await writable.close(); writable = null; const f = await handle.getFile(); f._handle = handle; return f; },
+    async finish() { await chain; await writable.close(); writable = null; const f = await handle.getFile(); f._handle = handle; f._src = "indirme"; return f; },
     async abort() { if (writable) { await writable.abort(); writable = null; } },
   };
 }
